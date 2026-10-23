@@ -14,6 +14,8 @@ by&nbsp;<a href="https://ascentspark.com" target="_blank" rel="noopener"><img sr
 [![React 19](https://img.shields.io/badge/React-19-087ea4.svg)](https://react.dev)
 [![license MIT](https://img.shields.io/github/license/ascentspark/react-image-editor?color=3b82f6)](https://github.com/ascentspark/react-image-editor/blob/main/LICENSE)
 
+### **[🚀 Live demo &amp; docs →](https://react-image-editor.ascentspark.com)**
+
 **[✨ Features](#features)** &nbsp;·&nbsp;
 **[🎨 Theming](#theming)** &nbsp;·&nbsp;
 **[🧩 API](#api)** &nbsp;·&nbsp;
@@ -493,8 +495,10 @@ future React major that needs a breaking peer bump gets a new package major.
 
 ## Documentation
 
-A live playground and full docs for every tool, theming, and the complete API live in the demo app
-(`apps/demo` — `npm run dev -w demo`).
+A live playground and full docs for every tool, theming, the complete API and more:
+**[react-image-editor.ascentspark.com](https://react-image-editor.ascentspark.com)**.
+
+To run the demo app locally: `apps/demo` — `npm run dev -w demo`.
 
 ## Local development
 
