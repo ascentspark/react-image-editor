@@ -637,3 +637,15 @@
     font-size: 0.95rem;
   }
 }
+
+.result__thumb {
+  height: 28px;
+  width: auto;
+  max-width: 72px;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border, #d7dbe2);
+  background: #fff;
+}

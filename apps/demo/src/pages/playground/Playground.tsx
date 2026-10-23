@@ -54,6 +54,8 @@ interface SnippetOptions {
   readonly height: string;
   readonly tools: readonly AspTool[] | null;
   readonly disabled: readonly AspTool[];
+  /** Commit-only hosting: no download, a host-worded commit button. */
+  readonly commitOnly: boolean;
 }
 
 /** Live React snippet that renders the editor with the current demo options. */
@@ -74,6 +76,9 @@ function buildCodeSnippet(options: SnippetOptions): string {
   if (options.disabled.length) {
     attrs.push(`disabledTools={${arr(options.disabled)}}`);
   }
+  if (options.commitOnly) {
+    attrs.push('commitLabel="Use this image"', 'showDownload={false}');
+  }
   attrs.push('onSaved={onSaved}');
 
   return [
@@ -82,7 +87,7 @@ function buildCodeSnippet(options: SnippetOptions): string {
     '',
     'export function EditorExample() {',
     '  const onSaved = (blob: Blob): void => {',
-    '    // the edited image — upload it, preview it, etc.',
+    '    // the committed image — upload it, preview it, etc. Nothing was downloaded.',
     "    console.log('saved', blob.type, blob.size);",
     '  };',
     '',
@@ -107,6 +112,10 @@ export default function Playground(): ReactElement {
   const [themeMode, setThemeMode] = useState<AspThemeMode>('light');
   const [editorMode, setEditorMode] = useState<AspMode>('advanced');
   const [lastResult, setLastResult] = useState('');
+  /** Object URL of the last committed Blob, previewed as a thumbnail (proof the host got pixels back). */
+  const [lastPreview, setLastPreview] = useState<string | null>(null);
+  /** Commit-only hosting: the Export menu loses its Download action and the commit button carries the host's label. */
+  const [commitOnly, setCommitOnly] = useState(false);
   const [customTools, setCustomTools] = useState<readonly AspTool[] | null>(null);
   const [disabled, setDisabled] = useState<readonly AspTool[]>([]);
   const [editorHeight, setEditorHeight] = useState('600px');
@@ -146,7 +155,22 @@ export default function Playground(): ReactElement {
     height: editorHeight,
     tools: customTools,
     disabled,
+    commitOnly,
   });
+
+  // Release the previous preview's object URL whenever it is replaced or the page unmounts.
+  useEffect(() => {
+    return () => {
+      if (lastPreview) {
+        URL.revokeObjectURL(lastPreview);
+      }
+    };
+  }, [lastPreview]);
+
+  const showResult = (blob: Blob | null): void => {
+    setLastPreview(blob ? URL.createObjectURL(blob) : null);
+    setLastResult(blob ? `saved ${blob.type} (${blob.size} bytes)` : 'canceled');
+  };
 
   const toggleCustomRail = (): void => {
     setCustomTools((tools) => (tools ? null : [...CUSTOM_RAIL]));
@@ -179,7 +203,29 @@ export default function Playground(): ReactElement {
       aspectPresets: ['1:1', '4:3', 'free'],
       initialAspect: '1:1',
     });
-    setLastResult(blob ? `saved ${blob.type} (${blob.size} bytes)` : 'canceled');
+    showResult(blob);
+  };
+
+  /**
+   * The logo flow from the Phlebio handoff: a wide wordmark placed into a square
+   * slot. `fitMode: 'contain'` lets it zoom OUT to fit, the letterbox is filled
+   * white at export, and the commit button says what it does.
+   */
+  const openLogoDialog = async (): Promise<void> => {
+    const blob = await openImageEditorDialog({
+      src: 'asc-logo-full.svg',
+      heading: 'Place the logo',
+      baseColor: base,
+      accentColor: accent,
+      themeMode,
+      aspectPresets: ['1:1', '16:9'],
+      initialAspect: '1:1',
+      fitMode: 'contain',
+      exportBackground: '#ffffff',
+      exportFormats: ['png'],
+      commitLabel: 'Use this logo',
+    });
+    showResult(blob);
   };
 
   const applyPreset = (preset: ThemePreset): void => {
@@ -200,7 +246,7 @@ export default function Playground(): ReactElement {
   };
 
   const onSaved = (blob: Blob): void => {
-    setLastResult(`saved ${blob.type} (${blob.size} bytes)`);
+    showResult(blob);
   };
 
   return (
@@ -324,13 +370,30 @@ export default function Playground(): ReactElement {
             >
               Disable filters / frame / redact
             </button>
+            <button
+              type="button"
+              className={commitOnly ? 'toggle toggle--on' : 'toggle'}
+              onClick={() => setCommitOnly((v) => !v)}
+            >
+              Commit only (no download)
+            </button>
             <button type="button" className="toggle" onClick={toggleCode}>
               {'</>'} Show code
             </button>
             <button type="button" className="btn-brand" onClick={() => void openDialog()}>
-              Open dialog
+              Profile photo dialog
             </button>
-            {lastResult && <span className="result">{lastResult}</span>}
+            <button type="button" className="btn-brand" onClick={() => void openLogoDialog()}>
+              Logo crop dialog
+            </button>
+            {lastResult && (
+              <span className="result">
+                {lastPreview && (
+                  <img className="result__thumb" src={lastPreview} alt="Committed image preview" />
+                )}
+                {lastResult}
+              </span>
+            )}
           </div>
         </div>
       </section>
@@ -377,6 +440,8 @@ export default function Playground(): ReactElement {
             baseColor={base}
             accentColor={accent}
             themeMode={themeMode}
+            commitLabel={commitOnly ? 'Use this image' : null}
+            showDownload={!commitOnly}
             onSaved={onSaved}
           />
         ) : (

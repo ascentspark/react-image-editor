@@ -27,7 +27,27 @@ async function edit(src: string): Promise<void> {
     aspectPresets: ['1:1', '4:3', 'free'],
   });
   if (blob) { /* user saved — upload blob */ }
-}`,
+}
+
+// The full workspace in a modal — every editor prop is accepted
+const edited = await openImageEditorDialog({
+  src,
+  mode: 'advanced',
+  tools: ['crop', 'rotate', 'adjust'],
+  commitLabel: 'Use this image',
+  showDownload: false,
+  width: 1100,
+  height: '80vh',
+});
+
+// A logo of any aspect into a square slot (letterbox filled white)
+const logo = await openImageEditorDialog({
+  src,
+  initialAspect: '1:1',
+  fitMode: 'contain',
+  exportBackground: '#ffffff',
+  commitLabel: 'Use this logo',
+});`,
   },
 ];
 
@@ -49,10 +69,18 @@ interface EventRow {
 }
 
 const EVENTS: readonly EventRow[] = [
-  { callback: 'onSaved', payload: 'Blob', fires: 'Export / Save' },
-  { callback: 'onCanceled', payload: 'void', fires: 'Basic-mode Cancel' },
+  {
+    callback: 'onSaved',
+    payload: 'Blob',
+    fires: 'The commit button (Save / Apply / commitLabel) in any chrome — never a download',
+  },
+  { callback: 'onCanceled', payload: 'void', fires: 'Dialog-chrome Cancel / close' },
   { callback: 'onImageLoaded', payload: 'void', fires: 'An image finished loading' },
-  { callback: 'onExported', payload: 'Blob', fires: 'Export download produced a Blob' },
+  {
+    callback: 'onExported',
+    payload: 'Blob',
+    fires: 'Export → Download wrote a file (does not fire onSaved)',
+  },
   { callback: 'onError', payload: 'AspEditorError', fires: 'Recoverable load/export/init error' },
 ];
 
@@ -65,16 +93,22 @@ interface PropRow {
 const PROPS: readonly PropRow[] = [
   { prop: 'src', type: 'string | Blob | null', def: 'null' },
   { prop: 'mode', type: 'AspMode', def: "'advanced'" },
+  { prop: 'chrome', type: "'dialog' | 'workspace' | 'viewer' | null", def: 'null (mode default)' },
   { prop: 'width / height', type: 'AspSize | null', def: 'null' },
   { prop: 'tools', type: 'AspTool[] | null', def: 'null' },
   { prop: 'disabledTools', type: 'AspTool[]', def: '[]' },
   { prop: 'filters', type: "AspFilter[] | 'all' | null", def: 'null' },
   { prop: 'aspectPresets', type: 'AspAspectPreset[]', def: "['free','1:1','4:3','16:9']" },
   { prop: 'aspectRatios', type: 'AspAspectOption[]', def: '[]' },
+  { prop: 'fitMode', type: "'cover' | 'contain'", def: "'cover'" },
   { prop: 'exportFormats', type: 'AspExportFormat[]', def: "['png','jpeg','webp']" },
   { prop: 'exportQuality', type: 'number', def: '90' },
   { prop: 'exportTarget', type: 'AspExportTarget | null', def: 'null' },
+  { prop: 'exportBackground', type: 'string | null', def: 'null' },
   { prop: 'heading', type: 'string', def: "'Edit image'" },
+  { prop: 'commitLabel', type: 'string | null', def: "null ('Save' in the dialog, 'Apply' elsewhere)" },
+  { prop: 'showCommit', type: 'boolean', def: 'true' },
+  { prop: 'showDownload', type: 'boolean', def: 'true' },
   { prop: 'showHistory', type: 'boolean', def: 'true' },
   { prop: 'keyboardEnabled', type: 'boolean', def: 'true' },
   { prop: 'fonts', type: 'FontOption[]', def: 'DEFAULT_FONTS' },
@@ -103,7 +137,7 @@ export default function Reference(): ReactElement {
       <DocExample
         anchor="dialog"
         title="Modal dialog"
-        description="For avatar / quick-edit flows, call openImageEditorDialog and await a Blob (or null on cancel). Opens the basic editor as a modal."
+        description="Call openImageEditorDialog and await a Blob (or null on cancel). Every editor prop is accepted on the config — mode defaults to basic, and chrome/width/height let the modal host the full workspace. The overlay traps Tab focus and returns focus to the opener on close."
         sources={DIALOG_SOURCES}
       >
         <button type="button" className="brandbtn" onClick={() => void edit()}>

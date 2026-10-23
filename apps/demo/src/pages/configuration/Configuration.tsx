@@ -7,6 +7,7 @@ import './Configuration.scss';
 
 const SECTIONS: PageSection[] = [
   { id: 'tools', label: 'Tools & filters' },
+  { id: 'chrome', label: 'Chrome vs. tools' },
   { id: 'theming', label: 'Theming' },
   { id: 'sizing', label: 'Canvas size' },
 ];
@@ -24,6 +25,35 @@ const TOOL_SOURCES: ExampleSource[] = [
 {/* filters: explicit list, 'all', or null for the mode default */}
 <ImageEditor mode="advanced" filters={['brightness', 'contrast', 'grayscale']} />
 <ImageEditor mode="advanced" filters="all" />`,
+  },
+];
+
+const CHROME_SOURCES: ExampleSource[] = [
+  {
+    label: 'TSX',
+    lang: 'tsx',
+    code: `{/* the basic tool set, but in the full workspace */}
+<ImageEditor mode="basic" chrome="workspace" />
+
+{/* the advanced tool set, inside the compact dialog card */}
+<ImageEditor mode="advanced" chrome="dialog" initialAspect="1:1" />
+
+{/* commit-only hosting: the host wants the Blob, never a file in Downloads */}
+<ImageEditor
+  mode="advanced"
+  commitLabel="Use this image"
+  showDownload={false}
+  onSaved={onCommitted}
+/>`,
+  },
+  {
+    label: 'TS',
+    lang: 'ts',
+    code: `// onSaved fires from the commit button in EVERY chrome and never from a download.
+// onExported fires from Export → Download only. Pass both if you want both.
+const onCommitted = (blob: Blob): void => {
+  upload(blob);
+};`,
   },
 ];
 
@@ -61,6 +91,7 @@ export default function Configuration(): ReactElement {
   const [base, setBase] = useState('#f4f6f9');
   const [accent, setAccent] = useState('#1f6feb');
   const [mode, setMode] = useState<AspThemeMode>('light');
+  const [committed, setCommitted] = useState('');
 
   const onBase = (e: ChangeEvent<HTMLInputElement>): void => setBase(e.target.value);
   const onAccent = (e: ChangeEvent<HTMLInputElement>): void => setAccent(e.target.value);
@@ -83,6 +114,31 @@ export default function Configuration(): ReactElement {
           Filters follow the same idea via <code>filters</code>: an explicit{' '}
           <code>AspFilter[]</code>, the literal <code>'all'</code> (every Fabric filter), or{' '}
           <code>null</code> for the mode default.
+        </p>
+      </DocExample>
+
+      <DocExample
+        anchor="chrome"
+        title="Chrome vs. tools"
+        description="mode picks a default tool set AND a default chrome; chrome overrides the second half on its own. Below: the basic tool set inside the full workspace. The commit button (commitLabel) hands the result back through onSaved and never writes a file; showDownload removes the Export menu's download for hosts that only want the Blob."
+        sources={CHROME_SOURCES}
+      >
+        <ImageEditor
+          mode="basic"
+          chrome="workspace"
+          commitLabel="Use this image"
+          showDownload={false}
+          height="480px"
+          onSaved={(blob) =>
+            setCommitted(`committed ${blob.type} — ${blob.size} bytes, nothing downloaded`)
+          }
+        />
+        {committed && <p className="note">{committed}</p>}
+        <p className="prose">
+          The three chromes: <code>dialog</code> (compact card, fixed crop frame — the image pans
+          and zooms under it), <code>workspace</code> (rail, options and layers, movable crop frame)
+          and <code>viewer</code> (zoom + export only). Defaults: <code>basic → dialog</code>,{' '}
+          <code>viewer → viewer</code>, <code>advanced</code> / <code>full → workspace</code>.
         </p>
       </DocExample>
 
