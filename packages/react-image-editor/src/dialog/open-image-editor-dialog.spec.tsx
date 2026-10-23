@@ -27,6 +27,7 @@ const FULL_CONFIG: Required<Omit<OpenImageEditorConfig, 'width' | 'maxWidth' | '
   aspectPresets: ['1:1'],
   initialAspect: '1:1',
   aspectRatios: [{ label: 'Wide', ratio: 3 }],
+  cropFrame: 'movable',
   fitMode: 'contain',
   exportFormats: ['png'],
   exportQuality: 80,

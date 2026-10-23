@@ -14,6 +14,8 @@ import { FILTER_REGISTRY } from '../registry/tool-registry';
 import { groupForTool } from '../registry/toolbar-groups';
 import {
   defaultChromeFor,
+  defaultCropFrameFor,
+  isAspectOption,
   type AspAspectOption,
   type AspAspectPreset,
   type AspEditorError,
@@ -23,6 +25,8 @@ import {
   type AspMode,
   type AspTool,
   type AspChrome,
+  type AspCropFrame,
+  type AspInitialAspect,
   type AspFitMode,
 } from '../types/editor.types';
 import {
@@ -59,6 +63,9 @@ export interface EditorUiState {
   readonly adjustments: Readonly<Record<string, number>>;
   readonly activeLook: AspFilter | null;
   readonly activeCrop: AspAspectPreset;
+  /** The selected custom aspect option; `null` while a preset (or nothing) is active. */
+  readonly activeAspectOption: AspAspectOption | null;
+  /** Label of {@link activeAspectOption}, or `''` — what the chips compare against. */
   readonly activeAspectLabel: string;
   /** Pixel target of the selected custom aspect option, when it declares one. */
   readonly activeAspectTarget: AspExportTarget | null;
@@ -129,12 +136,16 @@ export interface EditorControllerProps {
   readonly chrome: AspChrome | null;
   /** The tool keys the hook resolved for this mode / tool list, so the controller knows whether `crop` exists. */
   readonly resolvedToolKeys: readonly AspTool[];
-  readonly initialAspect: AspAspectPreset | null;
-  /** How the image fits the dialog chrome's fixed crop frame. */
+  readonly initialAspect: AspInitialAspect | null;
+  /** Crop frame override; `null` uses the chrome's default (see {@link defaultCropFrameFor}). */
+  readonly cropFrame: AspCropFrame | null;
+  /** How the image fits a fixed crop frame. */
   readonly fitMode: AspFitMode;
   /** Fill under unpainted raster-export pixels when the scene has no background. */
   readonly exportBackground: string | null;
   readonly aspectPresets: readonly AspAspectPreset[];
+  /** Host-defined aspect options; a sole one offered without `free` is the opening frame. */
+  readonly aspectRatios: readonly AspAspectOption[];
   readonly exportFormats: readonly AspExportFormat[];
   /** Pixel size a cropped export renders at; a selected aspect option overrides it. */
   readonly exportTarget: AspExportTarget | null;
@@ -215,6 +226,7 @@ export function initialEditorUiState(): EditorUiState {
     adjustments: defaultAdjustmentValues(),
     activeLook: null,
     activeCrop: 'free',
+    activeAspectOption: null,
     activeAspectLabel: '',
     activeAspectTarget: null,
     straighten: 0,
@@ -447,16 +459,20 @@ export class EditorController {
 
   /**
    * The aspect a freshly loaded image starts cropped to: an explicit
-   * `initialAspect`, else the sole non-`free` `aspectPresets` entry, else
-   * `free` (unconstrained).
+   * `initialAspect`, else the sole constrained chip — a non-`free`
+   * `aspectPresets` entry or an `aspectRatios` option — offered without a
+   * `free` chip, else `free` (unconstrained).
    */
-  private resolveInitialAspect(): AspAspectPreset {
+  private resolveInitialAspect(): AspInitialAspect {
     const explicit = this.props.initialAspect;
     if (explicit) {
       return explicit;
     }
     const presets = this.props.aspectPresets;
-    const constrained = presets.filter((p) => p !== 'free');
+    const constrained: AspInitialAspect[] = [
+      ...presets.filter((p) => p !== 'free'),
+      ...this.props.aspectRatios,
+    ];
     // Auto-pin the sole ratio only when the consumer did NOT also offer a Free
     // chip — offering Free means unconstrained is a deliberate, selectable default.
     if (constrained.length === 1 && !presets.includes('free')) {
@@ -465,40 +481,100 @@ export class EditorController {
     return 'free';
   }
 
+  /** Whether the current chrome + tool set can enforce a crop aspect at all. */
+  private canEnforceAspect(): boolean {
+    const layout = this.layout();
+    return (
+      layout === 'dialog' || (layout === 'workspace' && this.props.resolvedToolKeys.includes('crop'))
+    );
+  }
+
+  /** The state patch that makes `aspect` the active chip (preset or custom option). */
+  private aspectPatch(aspect: AspInitialAspect): Partial<EditorUiState> {
+    if (isAspectOption(aspect)) {
+      return {
+        activeCrop: 'free',
+        activeAspectOption: aspect,
+        activeAspectLabel: aspect.label,
+        activeAspectTarget:
+          aspect.width && aspect.height ? { width: aspect.width, height: aspect.height } : null,
+      };
+    }
+    return { activeCrop: aspect, activeAspectOption: null, activeAspectLabel: '', activeAspectTarget: null };
+  }
+
+  /** The ratio of the active chip (w/h), or `null` for a free crop. */
+  private activeRatio(): number | null {
+    const option = this.state.activeAspectOption;
+    return option ? option.ratio : this.ratioFromPreset(this.state.activeCrop);
+  }
+
   /**
    * After a load, constrain the crop to the resolved initial aspect — with a
-   * live frame in EVERY chrome that can crop. The dialog's fixed frame starts
-   * at once; the workspace enters the Crop tool, whose session sync opens the
-   * movable frame at this aspect. Where nothing can enforce the aspect (the
-   * viewer, or a tool set without `crop`) the chip is left inactive: the UI must
-   * never assert a constraint it is not applying.
+   * live frame in EVERY chrome that can crop. A fixed frame opens at once; a
+   * movable one opens by entering the Crop tool, whose session sync drops the
+   * frame at this aspect. Where nothing can enforce the aspect (the viewer, or
+   * a tool set without `crop`) the chip is left inactive: the UI must never
+   * assert a constraint it is not applying.
    */
   private applyInitialAspect(): void {
     const aspect = this.resolveInitialAspect();
-    if (aspect === 'free') {
-      this.patch({ activeCrop: 'free' });
+    if (aspect === 'free' || !this.canEnforceAspect()) {
+      this.patch(this.aspectPatch('free'));
       return;
     }
-    const layout = this.layout();
-    if (layout === 'dialog') {
-      this.patch({ activeCrop: aspect, activeAspectLabel: '', activeAspectTarget: null });
-      this.applyExportTarget();
-      this.ensureCropSession(this.ratioFromPreset(aspect));
-      return;
-    }
-    if (layout === 'workspace' && this.props.resolvedToolKeys.includes('crop')) {
-      this.patch({ activeCrop: aspect, activeAspectLabel: '', activeAspectTarget: null });
-      this.applyExportTarget();
-      if (this.state.activeTool === 'crop') {
-        // Already in the tool (e.g. the source changed): reshape or restart the frame.
-        this.patch({ cropActive: this.engine?.isCropping() ?? false });
-        this.ensureCropSession(this.ratioFromPreset(aspect));
-      } else {
+    this.patch(this.aspectPatch(aspect));
+    this.applyExportTarget();
+    const ratio = this.activeRatio();
+    if (this.resolvedCropFrame() === 'fixed') {
+      this.ensureCropSession(ratio);
+      if (this.layout() === 'workspace' && this.state.activeTool !== 'crop') {
         this.selectTool('crop');
       }
       return;
     }
-    this.patch({ activeCrop: 'free' });
+    if (this.layout() === 'dialog' || this.state.activeTool === 'crop') {
+      // Already in the tool (e.g. the source changed): reshape or restart the frame.
+      this.patch({ cropActive: this.engine?.isCropping() ?? false });
+      this.ensureCropSession(ratio);
+      return;
+    }
+    this.selectTool('crop');
+  }
+
+  /** The crop frame in use: the host's explicit `cropFrame`, else the chrome's default. */
+  resolvedCropFrame(): AspCropFrame {
+    return this.props.cropFrame ?? defaultCropFrameFor(this.layout());
+  }
+
+  /**
+   * React to `cropFrame` changing while a frame is live (hook effect): end the
+   * session of the other kind and reopen the active aspect in the new one. A
+   * movable frame is only reopened while the Crop tool is active (it is a
+   * session); a fixed one whenever an aspect is set (it is a slot).
+   */
+  syncCropFrame(): void {
+    const engine = this.engine;
+    if (!engine || !this.state.engineReady) {
+      return;
+    }
+    const frame = this.resolvedCropFrame();
+    const staleMovable = frame === 'fixed' && engine.isCropping();
+    const staleFixed = frame === 'movable' && engine.isImageCropping();
+    if (!staleMovable && !staleFixed) {
+      return;
+    }
+    if (staleMovable) {
+      engine.cancelCrop();
+    } else {
+      engine.cancelImageCrop();
+    }
+    this.patch({ cropActive: false });
+    const ratio = this.activeRatio();
+    if (frame === 'fixed' ? ratio !== null : this.state.activeTool === 'crop') {
+      this.ensureCropSession(ratio);
+    }
+    this.sync();
   }
 
   /** The chrome in use: the host's explicit `chrome`, else the mode's default. */
@@ -561,7 +637,7 @@ export class EditorController {
     this.patch({
       adjustments: defaultAdjustmentValues(),
       activeLook: null,
-      activeCrop: 'free',
+      ...this.aspectPatch('free'),
       straighten: 0,
       activeFrame: 'none',
     });
@@ -873,14 +949,23 @@ export class EditorController {
   }
 
   /**
-   * Crop tool shows an interactive frame; entering begins a session at the
+   * Crop tool. With a MOVABLE frame it is a session: entering begins one at the
    * current aspect, leaving without Apply discards the frame (the committed
-   * region, if any, persists).
+   * region, if any, persists). A FIXED frame is a slot, not a session: it
+   * outlives the tool, so entering only (re)opens it when an aspect is set and
+   * leaving keeps it.
    */
   syncCropSession(): void {
     const isCrop = this.state.activeTool === 'crop' && this.state.engineReady;
+    if (this.resolvedCropFrame() === 'fixed') {
+      const ratio = this.activeRatio();
+      if (isCrop && !this.state.cropActive && ratio !== null) {
+        this.ensureCropSession(ratio);
+      }
+      return;
+    }
     if (isCrop && !this.state.cropActive) {
-      this.engine?.beginCrop(this.ratioFromPreset(this.state.activeCrop));
+      this.engine?.beginCrop(this.activeRatio());
       this.patch({ cropActive: true });
     } else if (!isCrop && this.state.cropActive) {
       this.engine?.cancelCrop();
@@ -983,9 +1068,7 @@ export class EditorController {
       straighten: engine.straightenAngle,
       activeFrame: engine.activeFrame,
       // A crop's source aspect is not recoverable from the flattened scene.
-      activeCrop: 'free',
-      activeAspectLabel: '',
-      activeAspectTarget: null,
+      ...this.aspectPatch('free'),
     });
     this.applyExportTarget();
   }
@@ -1204,11 +1287,11 @@ export class EditorController {
     return aspectRatioValue(preset);
   }
 
-  /** Start the crop frame if one isn't already active (e.g. from the dialog's chips). */
+  /** Open the crop frame at `ratio`, or reshape it if one is already live (e.g. from a chip). */
   private ensureCropSession(ratio: number | null): void {
-    // Dialog chrome: the crop frame is FIXED; the image pans and zooms
-    // underneath it. The workspace keeps the movable-frame crop.
-    if (this.layout() === 'dialog') {
+    // Fixed frame: the frame stays put and the image pans and zooms underneath
+    // it. Movable frame: a draggable session over a still image.
+    if (this.resolvedCropFrame() === 'fixed') {
       this.engine?.setImageCropRatio(ratio);
       this.patch({ cropActive: this.engine?.isImageCropping() ?? false });
     } else if (this.engine && !this.engine.isCropping()) {
@@ -1224,7 +1307,7 @@ export class EditorController {
   /** Choose a crop aspect preset — reshapes (or starts) the live crop frame. */
   selectCrop(preset: AspAspectPreset): void {
     // A preset carries no pixel size, so exports fall back to the host default.
-    this.patch({ activeCrop: preset, activeAspectLabel: '', activeAspectTarget: null });
+    this.patch(this.aspectPatch(preset));
     this.applyExportTarget();
     this.ensureCropSession(this.ratioFromPreset(preset));
     this.sync();
@@ -1232,11 +1315,7 @@ export class EditorController {
 
   /** Choose a custom crop aspect (e.g. a CMS target) — reshapes (or starts) the live frame. */
   selectCustomCrop(option: AspAspectOption): void {
-    this.patch({
-      activeAspectLabel: option.label,
-      activeAspectTarget:
-        option.width && option.height ? { width: option.width, height: option.height } : null,
-    });
+    this.patch(this.aspectPatch(option));
     this.applyExportTarget();
     this.ensureCropSession(option.ratio);
     this.sync();
@@ -1261,7 +1340,7 @@ export class EditorController {
   resetCrop(): void {
     this.engine?.clearCropRegion();
     this.patch({ hasCropRegion: false });
-    this.engine?.beginCrop(this.ratioFromPreset(this.state.activeCrop));
+    this.engine?.beginCrop(this.activeRatio());
     this.sync();
   }
 

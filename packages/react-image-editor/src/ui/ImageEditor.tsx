@@ -16,14 +16,17 @@ import { FILTER_REGISTRY, TOOL_REGISTRY, type FilterMeta, type ToolMeta } from '
 import { resolveGroups, type ResolvedGroup } from '../registry/toolbar-groups';
 import {
   defaultChromeFor,
+  defaultCropFrameFor,
   type AspAspectOption,
   type AspAspectPreset,
   type AspChrome,
+  type AspCropFrame,
   type AspEditorError,
   type AspExportFormat,
   type AspExportTarget,
   type AspFilter,
   type AspFitMode,
+  type AspInitialAspect,
   type AspMode,
   type AspSize,
   type AspTool,
@@ -91,20 +94,32 @@ export interface ImageEditorProps {
   readonly filters?: readonly AspFilter[] | 'all' | null;
   readonly aspectPresets?: readonly AspAspectPreset[];
   /**
-   * Aspect the crop starts at. When set, the editor opens already constrained to
-   * it (in basic mode the crop frame is live immediately; in advanced/full it is
-   * the crop tool's starting aspect). When unset, a sole non-`free` preset is
-   * auto-selected, otherwise the crop opens unconstrained (`free`).
+   * Aspect the crop starts at — a preset, or a custom {@link AspAspectOption}
+   * (e.g. `aspectOption(1200, 630)`; list the same option in `aspectRatios` to
+   * show it as a chip). When set, the editor opens already constrained to it: a
+   * `fixed` frame is live immediately, a `movable` one opens in the Crop tool.
+   * When unset, a sole constrained chip (preset or custom) offered without
+   * `free` is auto-selected, otherwise the crop opens unconstrained (`free`).
    */
-  readonly initialAspect?: AspAspectPreset | null;
+  readonly initialAspect?: AspInitialAspect | null;
   /** Host-defined crop aspect targets (e.g. CMS sizes); shown after the presets. */
   readonly aspectRatios?: readonly AspAspectOption[];
   /**
-   * How the image fits the `dialog` chrome's fixed crop frame. `cover` (default)
-   * is the avatar crop — the frame is always filled, so the result has no gaps.
-   * `contain` is the logo crop — the zoom floor drops to the whole-image fit, so
-   * an image of any aspect can be placed inside the frame; the area it leaves
-   * uncovered is filled with {@link ImageEditorProps.exportBackground} at export.
+   * Which crop frame the Crop tool drives. `fixed` is the slot crop — the frame
+   * stays put and the image pans and zooms underneath it, persisting while other
+   * tools are used. `movable` is the editing crop — a draggable, resizable frame
+   * committed with Apply. `null` (default) takes the chrome's default: `fixed`
+   * in the dialog, `movable` elsewhere. Set `'fixed'` to get the slot crop with
+   * any tool set, e.g. a logo crop next to rotate, filters and text.
+   */
+  readonly cropFrame?: AspCropFrame | null;
+  /**
+   * How the image fits a `fixed` crop frame (see {@link ImageEditorProps.cropFrame}).
+   * `cover` (default) is the avatar crop — the frame is always filled, so the
+   * result has no gaps. `contain` is the logo crop — the zoom floor drops to the
+   * whole-image fit, so an image of any aspect can be placed inside the frame;
+   * the area it leaves uncovered is filled with
+   * {@link ImageEditorProps.exportBackground} at export.
    */
   readonly fitMode?: AspFitMode;
   readonly exportFormats?: readonly AspExportFormat[];
@@ -201,6 +216,7 @@ export function ImageEditor({
   aspectPresets = ['free', '1:1', '4:3', '16:9'],
   initialAspect = null,
   aspectRatios = [],
+  cropFrame = null,
   fitMode = 'cover',
   exportFormats = ['png', 'jpeg', 'webp'],
   exportQuality = 90,
@@ -235,6 +251,8 @@ export function ImageEditor({
     filters,
     aspectPresets,
     initialAspect,
+    aspectRatios,
+    cropFrame,
     fitMode,
     exportFormats,
     exportQuality,
@@ -328,6 +346,8 @@ export function ImageEditor({
   const zoomLabel = `${state.zoomPct}%`;
   /** The chrome in use: the host's explicit `chrome`, else the mode's default. */
   const layout: AspChrome = chrome ?? defaultChromeFor(mode);
+  /** The crop frame in use: the host's explicit `cropFrame`, else the chrome's default. */
+  const resolvedCropFrame: AspCropFrame = cropFrame ?? defaultCropFrameFor(layout);
   /** Text of the commit action: the host's label, else "Save" in the dialog and "Apply" elsewhere. */
   const commitText = commitLabel ?? (layout === 'dialog' ? 'Save' : 'Apply');
   /**
@@ -519,7 +539,7 @@ export function ImageEditor({
                     aria-hidden="true"
                   ></canvas>
                 )}
-                {state.activeTool === 'crop' && (
+                {state.activeTool === 'crop' && resolvedCropFrame === 'movable' && (
                   <div className="asp-crop-overlay" aria-hidden="true">
                     <span className="asp-crop-overlay__v" style={{ left: '33.33%' }}></span>
                     <span className="asp-crop-overlay__v" style={{ left: '66.66%' }}></span>
@@ -580,6 +600,7 @@ export function ImageEditor({
               onRequestTool={(tool) => controller.selectTool(tool)}
               onFillChange={(color) => controller.setFill(color)}
               hasCropRegion={state.hasCropRegion}
+              cropFrame={resolvedCropFrame}
               onSelectCrop={(preset) => controller.selectCrop(preset)}
               onSelectCustomCrop={(option) => controller.selectCustomCrop(option)}
               onApplyCrop={() => controller.applyCrop()}
@@ -670,7 +691,9 @@ export function ImageEditor({
 
             {state.cropActive && (
               <p className="asp-basic__hint">
-                Drag the photo to reposition · use the slider to zoom
+                {resolvedCropFrame === 'fixed'
+                  ? 'Drag the photo to reposition · use the slider to zoom'
+                  : 'Drag the frame and its handles to choose the area to keep'}
               </p>
             )}
 

@@ -7,6 +7,7 @@ import { type FilterMeta } from '../registry/tool-registry';
 import {
   type AspAspectOption,
   type AspAspectPreset,
+  type AspCropFrame,
   type AspFilter,
   type AspTool,
 } from '../types/editor.types';
@@ -152,6 +153,12 @@ export interface AspOptionsPanelProps {
 
   /** True once a crop region is applied — enables the Reset control. */
   readonly hasCropRegion?: boolean;
+  /**
+   * Which frame the Crop tool drives. A `fixed` frame is a slot the image pans
+   * under: no Apply/Cancel, the chips are the whole control. A `movable` frame
+   * is a session with Apply / Cancel / Reset.
+   */
+  readonly cropFrame?: AspCropFrame;
   /** Current artboard size (null = full canvas), and changes to it. */
   readonly artboard?: ArtboardSize | null;
 
@@ -249,6 +256,7 @@ export function AspOptionsPanel({
   frameOptions = FRAME_OPTIONS,
   activeFrame = 'none',
   hasCropRegion = false,
+  cropFrame = 'movable',
   artboard = null,
   onResetRequested,
   onAdjustInput,
@@ -526,22 +534,31 @@ export function AspOptionsPanel({
               </div>
             </div>
 
-            <p className="asp-hint">
-              <AspIcon name="info" size={13} /> Drag the frame and its handles to choose the area
-              to keep, then Apply.
-            </p>
-            <div className="asp-btn-row">
-              <button type="button" className="asp-btn-accent" onClick={() => onApplyCrop?.()}>
-                Apply crop
-              </button>
-              <button type="button" className="asp-btn-line" onClick={() => onCancelCrop?.()}>
-                Cancel
-              </button>
-            </div>
-            {hasCropRegion && (
-              <button type="button" className="asp-btn-line" onClick={() => onResetCrop?.()}>
-                Reset crop
-              </button>
+            {cropFrame === 'fixed' ? (
+              <p className="asp-hint">
+                <AspIcon name="info" size={13} /> Drag the photo to reposition · zoom with the − / +
+                controls. Pick Free to remove the frame.
+              </p>
+            ) : (
+              <>
+                <p className="asp-hint">
+                  <AspIcon name="info" size={13} /> Drag the frame and its handles to choose the
+                  area to keep, then Apply.
+                </p>
+                <div className="asp-btn-row">
+                  <button type="button" className="asp-btn-accent" onClick={() => onApplyCrop?.()}>
+                    Apply crop
+                  </button>
+                  <button type="button" className="asp-btn-line" onClick={() => onCancelCrop?.()}>
+                    Cancel
+                  </button>
+                </div>
+                {hasCropRegion && (
+                  <button type="button" className="asp-btn-line" onClick={() => onResetCrop?.()}>
+                    Reset crop
+                  </button>
+                )}
+              </>
             )}
 
             <div className="asp-section-label asp-mt">Rotate &amp; flip</div>

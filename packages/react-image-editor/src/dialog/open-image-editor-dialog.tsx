@@ -6,10 +6,12 @@ import {
   type AspAspectOption,
   type AspAspectPreset,
   type AspChrome,
+  type AspCropFrame,
   type AspExportFormat,
   type AspExportTarget,
   type AspFilter,
   type AspFitMode,
+  type AspInitialAspect,
   type AspMode,
   type AspSize,
   type AspTool,
@@ -39,9 +41,11 @@ export interface OpenImageEditorConfig {
   readonly accentColor?: string;
   readonly themeMode?: AspThemeMode;
   readonly aspectPresets?: readonly AspAspectPreset[];
-  /** Aspect the crop opens constrained to (e.g. `'1:1'` for an avatar). */
-  readonly initialAspect?: AspAspectPreset;
+  /** Aspect the crop opens constrained to — `'1:1'` for an avatar, or `aspectOption(1200, 630)`. */
+  readonly initialAspect?: AspInitialAspect;
   readonly aspectRatios?: readonly AspAspectOption[];
+  /** `'movable'` puts the editing crop (drag the frame) in the dialog; `'fixed'` the slot crop anywhere. */
+  readonly cropFrame?: AspCropFrame | null;
   /** `'contain'` lets an image of any aspect zoom out to fit the crop frame (logo crop). */
   readonly fitMode?: AspFitMode;
   readonly exportFormats?: readonly AspExportFormat[];
@@ -85,6 +89,7 @@ export const DIALOG_FORWARDED_PROPS = [
   'aspectPresets',
   'initialAspect',
   'aspectRatios',
+  'cropFrame',
   'fitMode',
   'exportFormats',
   'exportQuality',

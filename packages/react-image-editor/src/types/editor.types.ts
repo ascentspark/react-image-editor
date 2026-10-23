@@ -32,7 +32,7 @@ export function defaultChromeFor(mode: AspMode): AspChrome {
 }
 
 /**
- * How the image fits the fixed crop frame of the `dialog` chrome.
+ * How the image fits a `fixed` crop frame (see {@link AspCropFrame}).
  * `cover` (default, avatar crop): the image always fills the frame — the zoom
  * floor is the cover scale and the result never has gaps. `contain` (logo /
  * artwork crop): the zoom floor is the whole-image fit, so an image of any
@@ -40,6 +40,21 @@ export function defaultChromeFor(mode: AspMode): AspChrome {
  * export background at export time.
  */
 export type AspFitMode = 'cover' | 'contain';
+
+/**
+ * Which crop frame the Crop tool drives, independent of the chrome. `fixed` is
+ * the slot crop: the frame stays put and the image pans and zooms underneath
+ * it (this is the frame {@link AspFitMode} applies to). `movable` is the
+ * editing crop: a draggable, resizable frame over a still image, committed
+ * with Apply. Each chrome has a default — see {@link defaultCropFrameFor} — so
+ * a slot crop is reachable with any tool set, not only inside the dialog.
+ */
+export type AspCropFrame = 'fixed' | 'movable';
+
+/** The crop frame a chrome uses unless the host overrides it with `cropFrame`. */
+export function defaultCropFrameFor(chrome: AspChrome): AspCropFrame {
+  return chrome === 'dialog' ? 'fixed' : 'movable';
+}
 
 
 /**
@@ -143,6 +158,18 @@ export interface AspAspectOption {
 /** Build an {@link AspAspectOption} from explicit pixel dimensions. */
 export function aspectOption(width: number, height: number, label?: string): AspAspectOption {
   return { label: label ?? `${width}×${height}`, ratio: width / height, width, height };
+}
+
+/**
+ * An aspect the crop can open at: a preset, or a host-defined option (build one
+ * with {@link aspectOption}). Pass the same option in `aspectRatios` to show it
+ * as a selectable chip; the constraint applies either way.
+ */
+export type AspInitialAspect = AspAspectPreset | AspAspectOption;
+
+/** Narrow an {@link AspInitialAspect} to the custom-option branch. */
+export function isAspectOption(aspect: AspInitialAspect): aspect is AspAspectOption {
+  return typeof aspect !== 'string';
 }
 
 /**
