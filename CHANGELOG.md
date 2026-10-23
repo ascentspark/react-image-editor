@@ -2,6 +2,83 @@
 
 All notable changes to `@ascentsparksoftware/react-image-editor`.
 
+## 1.2.0 — 2026-10-23
+
+The React port of the Angular 22.2.0 release, driven by the Phlebio operator-panel
+handoff: a logo of any size and aspect has to be zoomed out, panned and cropped
+into a fixed slot, and the host needs the result as a Blob — never a file in
+Downloads. The five behavioural contracts are shared with the Angular sibling and
+verified by the same-named Playwright tests (`e2e/handoff-contracts.spec.ts`).
+
+> 1.1.0 (export resolution) was tagged but never reached npm — the Trusted
+> Publisher was not configured. 1.2.0 is the first release carrying both.
+
+### Changed — `onSaved` no longer fires from a download (**behavioural change**)
+
+`onSaved` means "the user committed, here is the result"; `onExported` means "a
+file was written". Export → Download used to call **both**. It now calls
+`onExported` only. A host that wants both passes both.
+
+### Added — a commit action in every chrome
+
+The workspace and viewer top bars gain an accent **Apply** button next to Export. It
+exports in the selected format, hands the Blob to `onSaved` and writes nothing —
+the same path the dialog's **Save** always took.
+
+- `commitLabel` — the button's text; `null` reads "Save" in the dialog, "Apply" elsewhere.
+- `showDownload={false}` — removes "Download image" from the Export menu (the button
+  then reads **Format** and only offers format / quality).
+- `showCommit={false}` — hides the commit button in the workspace and viewer.
+- Export is now a secondary (outlined) button so the top bar has one primary action.
+
+### Added — `chrome`: layout independent of the tool set
+
+`chrome: 'dialog' | 'workspace' | 'viewer' | null` picks the chrome on its own;
+`null` keeps today's mapping (`basic → dialog`, `viewer → viewer`, else
+`workspace`). `defaultChromeFor(mode)` is exported. Host sizing follows the chrome.
+
+### Fixed — `initialAspect` drew no crop frame outside the dialog, and the chip lied
+
+The workspace now opens in the Crop tool with its movable frame at that aspect.
+Where nothing can enforce the aspect (no `crop` tool, the viewer) the chip stays
+inactive.
+
+### Added — `fitMode="contain"` for the fixed-frame crop (the headline fix)
+
+The dialog crop kept the frame 100 % covered, so a wide wordmark in a square slot
+could only ever be centre-cropped. `contain` lowers the zoom floor to the
+whole-image fit (the image starts there, centred), keeps a looser pan clamp (a
+letterboxed image may float inside the frame but never leave it) and composites
+the uncovered area at export. **`cover` stays the default.**
+
+### Added — `exportBackground`, and JPEG never encodes transparency as black
+
+Unpainted export pixels are filled with the Background tool's colour when set;
+otherwise with `exportBackground`; otherwise PNG / WebP stay transparent and JPEG
+(and the PDF raster) are filled white. `EditorEngine.setExportBackground()`.
+
+### Fixed — one zoom floor per interaction
+
+`EditorEngine.zoomRange` is the single source for the slider's `min` / `max` and
+the clamp (image zoom while the fixed frame is active, viewport zoom otherwise),
+so the advertised minimum is always reachable. `state.zoomRange` carries it.
+
+### Added — the dialog forwards every prop, and traps focus
+
+`openImageEditorDialog()` takes every editor prop (`mode` defaults to `'basic'`),
+plus `width` / `maxWidth` / `height` for the card. The overlay is `aria-label`led,
+Tab cycles inside it, and focus returns to the opener on close.
+`resolveDialogProps()` / `DIALOG_FORWARDED_PROPS` back a test that fails when a
+new prop is not forwarded.
+
+### Internal
+
+Controller: `syncExportDefaults` split into `syncExportQuality` /
+`syncExportFormats` (a new format list resets the selection to its first entry);
+`layout()` is public; props gain `chrome`, `fitMode`, `exportBackground`,
+`resolvedToolKeys`. CI now publishes the runner's visual baselines as an artifact
+every run so they can be refreshed after an intentional UI change.
+
 ## 1.1.0 — 2026-08-04
 
 ### Fixed — cropped exports were silently downsampled to screen resolution

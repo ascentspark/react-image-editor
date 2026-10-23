@@ -1,6 +1,6 @@
 {
   "name": "@ascentsparksoftware/react-image-editor",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Standalone, themeable React 19 image editor built on Fabric.js v7 (MIT). A free, open-source alternative to commercial image editors — crop, rotate, filters, draw, text, redact, export.",
   "keywords": [
     "react",

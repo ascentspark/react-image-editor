@@ -286,7 +286,7 @@ full token map, and `applyTheme(element, tokens)` sets them.
 
 ## Modal dialog
 
-For avatar / quick-edit flows, open the `basic` editor as a modal and await the result:
+For avatar / quick-edit flows, open the editor as a modal and await the result:
 
 ```tsx
 import { openImageEditorDialog } from '@ascentsparksoftware/react-image-editor';
@@ -304,11 +304,94 @@ async function editAvatar(src: string): Promise<void> {
 }
 ```
 
+**Every prop is accepted on the config.** `mode` defaults to `'basic'`; pass `mode: 'advanced'`
+(or any `chrome`) plus `width` / `height` to host the full workspace in the modal. The overlay traps
+Tab focus and returns focus to the element that opened it.
+
+```tsx
+const blob = await openImageEditorDialog({
+  src,
+  mode: 'advanced',
+  tools: ['crop', 'rotate', 'adjust'],
+  commitLabel: 'Use this image',
+  showDownload: false,
+  width: 1100,
+  height: '80vh',
+});
+```
+
 **Starting crop.** Pass `initialAspect` (e.g. `'1:1'`) — on `openImageEditorDialog()` or as the
 `initialAspect` prop on `<ImageEditor>` — to open already constrained to that ratio. If you omit it
 and supply a single non-`free` preset (e.g. `aspectPresets: ['1:1']`), that ratio is auto-selected;
-otherwise the crop opens unconstrained (`free`). In `basic` mode the crop frame is live immediately;
-in `advanced`/`full` it becomes the crop tool's starting aspect.
+otherwise the crop opens unconstrained (`free`). The frame is live in every chrome that can crop: the
+dialog's fixed frame starts at once, the workspace opens in the Crop tool with its movable frame at
+that aspect. Where nothing can enforce it (a tool set without `crop`) the chip stays inactive.
+
+### Commit vs. download
+
+Two callbacks for two intents, and they never overlap:
+
+| Action | Where | Callback | Writes a file? |
+|---|---|---|---|
+| **Commit** — Save / Apply / your `commitLabel` | every chrome | `onSaved(blob)` | **No** |
+| **Export → Download image** | workspace / viewer Export menu | `onExported(blob)` | Yes |
+
+A download never fires `onSaved`, so a host collecting the result is never also left with a copy in
+the user's Downloads folder. Hosts that only want the Blob pass `showDownload={false}` (the Export
+menu then only offers Format / Quality); hosts that only want downloads can pass `showCommit={false}`
+in the workspace and viewer. The dialog chrome always has a commit button.
+
+```tsx
+<ImageEditor mode="advanced" commitLabel="Use this image" showDownload={false} onSaved={upload} />
+```
+
+### Chrome vs. tools
+
+`mode` picks a default tool set **and** a default chrome; `chrome` overrides the second half on its own.
+
+| `chrome` | What renders | Crop model |
+|---|---|---|
+| `dialog` (default for `basic`) | compact card: heading, aspect chips, rotate/flip, zoom, Cancel / commit | **fixed frame** — the image pans and zooms underneath |
+| `workspace` (default for `advanced` / `full`) | rail, options panel, layers, history | **movable frame** over the image |
+| `viewer` (default for `viewer`) | zoom + Export + commit bar | — |
+
+```tsx
+{/* the basic tool set, but in the full workspace */}
+<ImageEditor mode="basic" chrome="workspace" />
+{/* the advanced tool set inside the compact dialog card */}
+<ImageEditor mode="advanced" chrome="dialog" initialAspect="1:1" />
+```
+
+### Logo crop — `fitMode="contain"`
+
+The fixed-frame (dialog) crop is an **avatar crop** by default: `fitMode="cover"` keeps the frame
+fully covered, so the zoom floor is the cover scale and the result never has gaps. That is wrong for
+a logo: a 2282×832 wordmark in a square slot can only ever be centre-cropped.
+
+`fitMode="contain"` lowers the zoom floor to the **whole-image fit**, so an image of any aspect can be
+zoomed out and placed inside the frame. The slider's `min` is that floor — exactly reachable. The area
+the image leaves uncovered is filled at export with the **export background**:
+
+- a background set with the Background tool, if any;
+- else `exportBackground` (e.g. `'#ffffff'`);
+- else PNG / WebP stay **transparent** and JPEG is filled **white** — never black.
+
+```tsx
+const logo = await openImageEditorDialog({
+  src,
+  heading: 'Place the logo',
+  aspectPresets: ['1:1', '16:9'],
+  initialAspect: '1:1',
+  fitMode: 'contain',          // default 'cover' is unchanged for existing callers
+  exportBackground: '#ffffff', // omit for a transparent PNG
+  exportFormats: ['png'],
+  commitLabel: 'Use this logo',
+});
+```
+
+One zoom floor per interaction: while the fixed frame is active the slider zooms the **image** (100 %
+= the image exactly fills the frame); otherwise it zooms the viewport (floor 25 %). The slider's
+`min` / `max` always reflect which one it is driving (`state.zoomRange`).
 
 
 ### Export resolution
@@ -340,7 +423,8 @@ becomes a 1000px blur) and at a 4096×4096 bitmap so low-end devices can allocat
 | Prop | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `src` | `string \| Blob \| null` | `null` (sample image) | Image to edit — URL, `Blob`/`File`, or data URL |
-| `mode` | `'viewer' \| 'basic' \| 'advanced' \| 'full'` | `'advanced'` | Layout + default tool set |
+| `mode` | `'viewer' \| 'basic' \| 'advanced' \| 'full'` | `'advanced'` | Default tool set + default chrome |
+| `chrome` | `'dialog' \| 'workspace' \| 'viewer' \| null` | mode default | Layout, independent of the tool set |
 | `width` / `height` | `number \| string \| null` | fill container | px number, `%`, `vh`, any CSS length / `calc()` |
 | `tools` | `AspTool[] \| null` | mode default | Explicit tool allowlist (order preserved) |
 | `disabledTools` | `AspTool[]` | `[]` | Subtracted from the resolved set |
@@ -348,22 +432,27 @@ becomes a 1000px blur) and at a 4096×4096 bitmap so low-end devices can allocat
 | `aspectPresets` | `AspAspectPreset[]` | `['free','1:1','4:3','16:9']` | Crop preset chips |
 | `initialAspect` | `AspAspectPreset \| null` | `null` | Open already cropped to this ratio |
 | `aspectRatios` | `AspAspectOption[]` | `[]` | Custom CMS targets, e.g. `aspectOption(1200, 630)` |
+| `fitMode` | `'cover' \| 'contain'` | `'cover'` | `contain` = zoom out to the whole-image fit (logo crop) |
 | `exportFormats` | `AspExportFormat[]` | `['png','jpeg','webp']` | Offered formats (+ `'svg'`, `'pdf'`, `'json'`) |
 | `exportQuality` | `number` | `90` | 10–100 |
 | `exportTarget` | `AspExportTarget \| null` | `null` | Exact px size for a cropped export |
+| `exportBackground` | `string \| null` | `null` | Fill under unpainted export pixels (JPEG falls back to white) |
 | `baseColor` | `string` | `'#f4f6f9'` | Theme neutral anchor |
 | `accentColor` | `string` | `'#1f6feb'` | Theme accent |
 | `themeMode` | `'light' \| 'dark'` | `'light'` | Theme mode |
-| `heading` | `string` | `'Edit image'` | Basic-mode title |
+| `heading` | `string` | `'Edit image'` | Dialog-chrome title |
+| `commitLabel` | `string \| null` | `'Save'` / `'Apply'` | Commit button text |
+| `showCommit` | `boolean` | `true` | Commit button in the workspace / viewer |
+| `showDownload` | `boolean` | `true` | "Download image" in the Export menu |
 | `showHistory` | `boolean` | `true` | Show the history panel |
 | `keyboardEnabled` | `boolean` | `true` | Editor keyboard shortcuts |
 | `fonts` | `FontOption[]` | `DEFAULT_FONTS` | Text font choices |
 | `backgroundRemovalLoader` | `AspBackgroundRemovalLoader \| null` | `null` | Opt-in AI background removal |
 | `heicDecoderLoader` | `AspHeicDecoderLoader \| null` | `null` | Opt-in HEIC/HEIF import |
-| `onSaved` | `(blob: Blob) => void` | — | Export / Save produced a Blob |
-| `onCanceled` | `() => void` | — | Basic-mode Cancel |
+| `onSaved` | `(blob: Blob) => void` | — | The commit action (never a download) |
+| `onCanceled` | `() => void` | — | Dialog Cancel / close |
 | `onImageLoaded` | `() => void` | — | An image finished loading |
-| `onExported` | `(blob: Blob) => void` | — | Export download produced a Blob |
+| `onExported` | `(blob: Blob) => void` | — | Export → Download wrote a file (does not fire `onSaved`) |
 | `onError` | `(error: AspEditorError) => void` | — | Recoverable load/export/init error |
 
 ### Keyboard shortcuts
