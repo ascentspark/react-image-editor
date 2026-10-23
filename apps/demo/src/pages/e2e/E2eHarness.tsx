@@ -5,10 +5,13 @@ import {
   ImageEditor,
   aspectOption,
   openImageEditorDialog,
+  type AspAspectPreset,
   type AspChrome,
+  type AspCropFrame,
   type AspEditorError,
   type AspExportFormat,
   type AspFitMode,
+  type AspInitialAspect,
   type AspMode,
   type AspTool,
   type OpenImageEditorConfig,
@@ -17,6 +20,9 @@ import {
 const MODES: readonly AspMode[] = ['viewer', 'basic', 'advanced', 'full'];
 const CHROMES: readonly AspChrome[] = ['dialog', 'workspace', 'viewer'];
 const ALL_FORMATS: readonly AspExportFormat[] = ['png', 'jpeg', 'webp', 'svg', 'json', 'pdf'];
+const PRESETS: readonly AspAspectPreset[] = ['free', '1:1', '4:3', '16:9', '3:2', 'original'];
+const CROP_FRAMES: readonly AspCropFrame[] = ['fixed', 'movable'];
+const DEFAULT_PRESETS: readonly AspAspectPreset[] = ['free', '1:1', '4:3', '16:9'];
 
 /**
  * Build a deterministic test image: white with a black grid and a diagonal.
@@ -146,7 +152,31 @@ export default function E2eHarness(): ReactElement {
     [toolsParam],
   );
   const themeMode = params.get('theme') === 'dark' ? 'dark' : 'light';
-  const initialAspect = params.get('aspect') === '1:1' ? '1:1' : null;
+  // `aspect=1:1` opens at a preset; `aspect=1200x630` at a custom option (same label as `chip=`).
+  const aspectParam = params.get('aspect');
+  const initialAspect = useMemo<AspInitialAspect | null>(() => {
+    if (PRESETS.includes(aspectParam as AspAspectPreset)) {
+      return aspectParam as AspAspectPreset;
+    }
+    const size = parseSize(aspectParam);
+    return size ? aspectOption(size.width, size.height) : null;
+  }, [aspectParam]);
+  // `presets=1:1,16:9` replaces the preset chips; `presets=` (empty) removes them all.
+  const presetsParam = params.get('presets');
+  const aspectPresets = useMemo<readonly AspAspectPreset[]>(
+    () =>
+      presetsParam === null
+        ? DEFAULT_PRESETS
+        : presetsParam
+            .split(',')
+            .filter((p): p is AspAspectPreset => PRESETS.includes(p as AspAspectPreset)),
+    [presetsParam],
+  );
+  // `frame=fixed` / `frame=movable` overrides the chrome's default crop frame.
+  const frameParam = params.get('frame');
+  const cropFrame: AspCropFrame | null = CROP_FRAMES.includes(frameParam as AspCropFrame)
+    ? (frameParam as AspCropFrame)
+    : null;
   const fitMode: AspFitMode = params.get('fit') === 'contain' ? 'contain' : 'cover';
   const bgParam = params.get('bg');
   const exportBackground = bgParam && /^[0-9a-f]{6}$/i.test(bgParam) ? `#${bgParam}` : null;
@@ -250,9 +280,10 @@ export default function E2eHarness(): ReactElement {
       tools,
       heading: 'Update profile photo',
       themeMode,
-      aspectPresets: ['1:1', '4:3', 'free'],
+      aspectPresets: dialogOnly ? aspectPresets : ['1:1', '4:3', 'free'],
       initialAspect: initialAspect ?? undefined,
       aspectRatios,
+      cropFrame,
       fitMode,
       exportBackground,
       exportTarget,
@@ -293,8 +324,10 @@ export default function E2eHarness(): ReactElement {
             themeMode={themeMode}
             baseColor={themeMode === 'dark' ? '#10151d' : '#f4f6f9'}
             accentColor="#1f6feb"
+            aspectPresets={aspectPresets}
             initialAspect={initialAspect}
             aspectRatios={aspectRatios}
+            cropFrame={cropFrame}
             fitMode={fitMode}
             exportBackground={exportBackground}
             exportTarget={exportTarget}

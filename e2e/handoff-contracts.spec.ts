@@ -10,6 +10,13 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * 3. An initial aspect either enforces a frame or does not render as active.
  * 4. A `contain` fit mode exists; `cover` stays the default.
  * 5. One zoom floor per interaction state, exposed to the slider.
+ *
+ * Plus the two follow-ups from the 2026-10-23 review of that handoff:
+ *
+ * 6. The crop frame kind (`cropFrame`) is selectable independently of the
+ *    chrome, so a fixed-slot `contain` crop is reachable with any tool set.
+ * 7. `initialAspect` accepts a custom {@link AspAspectOption}, so a custom
+ *    ratio can be the opening frame, not only a chip.
  */
 
 async function open(page: Page, params: Record<string, string>): Promise<void> {
@@ -24,6 +31,11 @@ async function expectSaved(page: Page): Promise<void> {
 
 function zoomSlider(page: Page): Locator {
   return page.getByLabel('Zoom', { exact: true });
+}
+
+/** The workspace has no slider: its zoom readout is the only visible zoom state. */
+function zoomReadout(page: Page): Locator {
+  return page.locator('.asp-zoom__label');
 }
 
 /** `r,g,b,a` from the harness → numbers. */
@@ -219,5 +231,73 @@ test.describe('packaged dialog', () => {
     await expect(modal).toHaveCount(0);
     // Focus returned to the opener.
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))).toBe('open-dialog');
+  });
+});
+
+test.describe('contract 6 — crop frame is independent of chrome', () => {
+  const logo = { source: '2282x832', shell: '900', fit: 'contain' };
+
+  test('fixed_crop_frame_is_reachable_in_the_workspace', async ({ page }) => {
+    await open(page, { ...logo, mode: 'advanced', frame: 'fixed', aspect: '1:1' });
+    // The slot crop is live: the zoom readout is the image zoom at the contain floor
+    // (36%, not the 100% viewport) and the options panel shows the pan hint instead
+    // of Apply / Cancel. Zooming out at the floor stays put — one floor, honoured.
+    await expect(zoomReadout(page)).toHaveText('36%');
+    await page.getByRole('button', { name: 'Zoom out', exact: true }).click();
+    await expect(zoomReadout(page)).toHaveText('36%');
+    await expect(page.getByText('Drag the photo to reposition')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Apply crop' })).toHaveCount(0);
+    await expect(page.locator('.asp-crop-overlay')).toHaveCount(0);
+    await expect(page.locator('.asp-chip--active', { hasText: '1:1' })).toBeVisible();
+  });
+
+  test('fixed_crop_frame_persists_across_tools_and_commits_the_slot', async ({ page }) => {
+    await open(page, { ...logo, mode: 'advanced', frame: 'fixed', aspect: '1:1' });
+    await expect(zoomReadout(page)).toHaveText('36%');
+    // Leaving the Crop tool keeps the slot (a session would have been discarded
+    // and the readout would snap back to the 100% viewport zoom).
+    await page.getByRole('button', { name: 'Color', exact: true }).click();
+    await expect(page.getByText('Drag the photo to reposition')).toHaveCount(0);
+    await expect(zoomReadout(page)).toHaveText('36%');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expectSaved(page);
+    const [w, h] = ((await page.getByTestId('stat-saved-size').textContent()) ?? '').split('x').map(Number);
+    expect(w).toBe(h);
+  });
+
+  test('movable_crop_frame_is_reachable_in_the_dialog', async ({ page }) => {
+    await open(page, { mode: 'basic', frame: 'movable', aspect: '1:1' });
+    await expect(page.getByText('Drag the frame and its handles')).toBeVisible();
+    // The movable frame leaves the viewport zoom alone (floor 25, not the cover 100).
+    await expect(zoomSlider(page)).toHaveAttribute('min', '25');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expectSaved(page);
+    const [w, h] = ((await page.getByTestId('stat-saved-size').textContent()) ?? '').split('x').map(Number);
+    expect(w).toBe(h);
+  });
+});
+
+test.describe('contract 7 — custom initial aspect', () => {
+  test('custom_initial_aspect_opens_the_frame_and_activates_its_chip (dialog)', async ({ page }) => {
+    await open(page, { mode: 'basic', aspect: '1200x630', chip: '1200x630', source: '2400' });
+    await expect(page.getByText('Drag the photo to reposition')).toBeVisible();
+    await expect(page.locator('.asp-chip--active', { hasText: '1200×630' })).toBeVisible();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expectSaved(page);
+    // The option's pixel target is honoured from the start, not only once its chip is clicked.
+    await expect(page.getByTestId('stat-saved-size')).toHaveText('1200x630');
+  });
+
+  test('custom_initial_aspect_opens_the_frame_and_activates_its_chip (workspace)', async ({ page }) => {
+    await open(page, { mode: 'advanced', aspect: '1200x630', chip: '1200x630' });
+    await expect(page.getByRole('button', { name: 'Apply crop' })).toBeVisible();
+    await expect(page.locator('.asp-chip--active', { hasText: '1200×630' })).toBeVisible();
+    await expect(page.locator('.asp-chip--active', { hasText: 'Free' })).toHaveCount(0);
+  });
+
+  test('a sole custom chip offered without Free is the opening frame', async ({ page }) => {
+    await open(page, { mode: 'basic', presets: '', chip: '1200x630', source: '2400' });
+    await expect(page.locator('.asp-chip--active', { hasText: '1200×630' })).toBeVisible();
+    await expect(page.getByText('Drag the photo to reposition')).toBeVisible();
   });
 });
