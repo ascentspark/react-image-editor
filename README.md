@@ -322,12 +322,15 @@ const blob = await openImageEditorDialog({
 });
 ```
 
-**Starting crop.** Pass `initialAspect` (e.g. `'1:1'`) — on `openImageEditorDialog()` or as the
-`initialAspect` prop on `<ImageEditor>` — to open already constrained to that ratio. If you omit it
-and supply a single non-`free` preset (e.g. `aspectPresets: ['1:1']`), that ratio is auto-selected;
-otherwise the crop opens unconstrained (`free`). The frame is live in every chrome that can crop: the
-dialog's fixed frame starts at once, the workspace opens in the Crop tool with its movable frame at
-that aspect. Where nothing can enforce it (a tool set without `crop`) the chip stays inactive.
+**Starting crop.** Pass `initialAspect` — on `openImageEditorDialog()` or as the `initialAspect`
+prop on `<ImageEditor>` — to open already constrained to it. It takes a preset (`'1:1'`) **or a
+custom option** (`aspectOption(1200, 630, 'Social')`), so a custom ratio can be the opening frame, not
+only a chip; list the same option in `aspectRatios` to show it as a chip. If you omit it and offer a
+single constrained chip without `free` (e.g. `aspectPresets: ['1:1']`, or no presets and one
+`aspectRatios` entry), that one is auto-selected; otherwise the crop opens unconstrained (`free`). The
+frame is live in every chrome that can crop: a fixed frame starts at once, a movable one opens in the
+Crop tool at that aspect. Where nothing can enforce it (a tool set without `crop`) the chip stays
+inactive.
 
 ### Commit vs. download
 
@@ -351,10 +354,10 @@ in the workspace and viewer. The dialog chrome always has a commit button.
 
 `mode` picks a default tool set **and** a default chrome; `chrome` overrides the second half on its own.
 
-| `chrome` | What renders | Crop model |
+| `chrome` | What renders | Default crop frame |
 |---|---|---|
-| `dialog` (default for `basic`) | compact card: heading, aspect chips, rotate/flip, zoom, Cancel / commit | **fixed frame** — the image pans and zooms underneath |
-| `workspace` (default for `advanced` / `full`) | rail, options panel, layers, history | **movable frame** over the image |
+| `dialog` (default for `basic`) | compact card: heading, aspect chips, rotate/flip, zoom, Cancel / commit | **fixed** — the image pans and zooms underneath |
+| `workspace` (default for `advanced` / `full`) | rail, options panel, layers, history | **movable** frame over the image |
 | `viewer` (default for `viewer`) | zoom + Export + commit bar | — |
 
 ```tsx
@@ -364,9 +367,36 @@ in the workspace and viewer. The dialog chrome always has a commit button.
 <ImageEditor mode="advanced" chrome="dialog" initialAspect="1:1" />
 ```
 
+### Crop frame vs. chrome — `cropFrame`
+
+The crop model is a third, independent switch. `cropFrame: 'fixed' | 'movable' | null` picks it on its
+own; `null` (the default) keeps each chrome's default from the table above.
+
+| `cropFrame` | Behaviour |
+|---|---|
+| `fixed` | **Slot crop.** The frame stays put; the image pans and zooms underneath it (`fitMode` applies). It is a slot, not a session: it persists while other tools are used, the options panel shows the aspect chips only (no Apply / Cancel — *Free* removes the frame), and the commit button exports the slot. |
+| `movable` | **Editing crop.** A draggable, resizable frame over a still image, opened by the Crop tool and committed with Apply. |
+
+So the advanced tool set with a fixed-slot `contain` crop is one prop away:
+
+```tsx
+<ImageEditor
+  mode="advanced"
+  cropFrame="fixed"
+  fitMode="contain"
+  aspectRatios={[social]}
+  initialAspect={social}
+  commitLabel="Use this banner"
+/>
+```
+
+and a movable editing crop inside the compact dialog card is `<ImageEditor mode="basic"
+cropFrame="movable" />`.
+
 ### Logo crop — `fitMode="contain"`
 
-The fixed-frame (dialog) crop is an **avatar crop** by default: `fitMode="cover"` keeps the frame
+The fixed crop frame (the dialog's default, or `cropFrame="fixed"` anywhere) is an **avatar crop** by
+default: `fitMode="cover"` keeps the frame
 fully covered, so the zoom floor is the cover scale and the result never has gaps. That is wrong for
 a logo: a 2282×832 wordmark in a square slot can only ever be centre-cropped.
 
@@ -432,8 +462,9 @@ becomes a 1000px blur) and at a 4096×4096 bitmap so low-end devices can allocat
 | `disabledTools` | `AspTool[]` | `[]` | Subtracted from the resolved set |
 | `filters` | `AspFilter[] \| 'all' \| null` | mode default | Adjustments + looks offered |
 | `aspectPresets` | `AspAspectPreset[]` | `['free','1:1','4:3','16:9']` | Crop preset chips |
-| `initialAspect` | `AspAspectPreset \| null` | `null` | Open already cropped to this ratio |
+| `initialAspect` | `AspAspectPreset \| AspAspectOption \| null` | `null` | Preset or `aspectOption(...)` to open cropped to |
 | `aspectRatios` | `AspAspectOption[]` | `[]` | Custom CMS targets, e.g. `aspectOption(1200, 630)` |
+| `cropFrame` | `'fixed' \| 'movable' \| null` | `null` | `fixed` (slot) / `movable` (editing); `null` = chrome default |
 | `fitMode` | `'cover' \| 'contain'` | `'cover'` | `contain` = zoom out to the whole-image fit (logo crop) |
 | `exportFormats` | `AspExportFormat[]` | `['png','jpeg','webp']` | Offered formats (+ `'svg'`, `'pdf'`, `'json'`) |
 | `exportQuality` | `number` | `90` | 10–100 |

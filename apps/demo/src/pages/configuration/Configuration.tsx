@@ -1,5 +1,10 @@
 import { useState, type ChangeEvent, type ReactElement } from 'react';
-import { ImageEditor, type AspThemeMode } from '@ascentsparksoftware/react-image-editor';
+import {
+  ImageEditor,
+  aspectOption,
+  type AspAspectOption,
+  type AspThemeMode,
+} from '@ascentsparksoftware/react-image-editor';
 
 import { DocExample, type ExampleSource } from '../../shared/DocExample';
 import { DocPage, type PageSection } from '../../shared/DocPage';
@@ -8,6 +13,7 @@ import './Configuration.scss';
 const SECTIONS: PageSection[] = [
   { id: 'tools', label: 'Tools & filters' },
   { id: 'chrome', label: 'Chrome vs. tools' },
+  { id: 'crop-frame', label: 'Crop frame & opening aspect' },
   { id: 'theming', label: 'Theming' },
   { id: 'sizing', label: 'Canvas size' },
 ];
@@ -54,6 +60,52 @@ const CHROME_SOURCES: ExampleSource[] = [
 const onCommitted = (blob: Blob): void => {
   upload(blob);
 };`,
+  },
+];
+
+/** A CMS target with real pixel dimensions; the chip label and the export size come from it. */
+const SOCIAL_RATIOS: readonly AspAspectOption[] = [aspectOption(1200, 630, 'Social')];
+
+const CROP_FRAME_SOURCES: ExampleSource[] = [
+  {
+    label: 'TSX',
+    lang: 'tsx',
+    code: `{/* advanced tool set + fixed-slot contain crop, opening at a custom ratio */}
+<ImageEditor
+  mode="advanced"
+  cropFrame="fixed"
+  fitMode="contain"
+  aspectPresets={['1:1']}
+  aspectRatios={SOCIAL_RATIOS}
+  initialAspect={SOCIAL_RATIOS[0]}
+  exportBackground="#ffffff"
+  commitLabel="Use this banner"
+  onSaved={onCommitted}
+/>
+
+{/* the editing (movable) crop inside the compact dialog card */}
+<ImageEditor mode="basic" cropFrame="movable" initialAspect="1:1" />`,
+  },
+  {
+    label: 'TS',
+    lang: 'ts',
+    code: `import { aspectOption, type AspAspectOption } from '@ascentsparksoftware/react-image-editor';
+
+// initialAspect accepts a preset ('1:1', '16:9', …) OR an AspAspectOption.
+// List the same option in aspectRatios to show it as a chip; the constraint
+// (and its 1200×630 export size) applies either way.
+const SOCIAL_RATIOS: readonly AspAspectOption[] = [aspectOption(1200, 630, 'Social')];
+
+// Same thing through the dialog:
+const banner = await openImageEditorDialog({
+  src,
+  mode: 'advanced',
+  cropFrame: 'fixed',
+  fitMode: 'contain',
+  aspectRatios: SOCIAL_RATIOS,
+  initialAspect: SOCIAL_RATIOS[0],
+  commitLabel: 'Use this banner',
+});`,
   },
 ];
 
@@ -135,10 +187,45 @@ export default function Configuration(): ReactElement {
         />
         {committed && <p className="note">{committed}</p>}
         <p className="prose">
-          The three chromes: <code>dialog</code> (compact card, fixed crop frame — the image pans
-          and zooms under it), <code>workspace</code> (rail, options and layers, movable crop frame)
-          and <code>viewer</code> (zoom + export only). Defaults: <code>basic → dialog</code>,{' '}
-          <code>viewer → viewer</code>, <code>advanced</code> / <code>full → workspace</code>.
+          The three chromes: <code>dialog</code> (compact card; fixed crop frame by default — the
+          image pans and zooms under it), <code>workspace</code> (rail, options and layers; movable
+          crop frame by default) and <code>viewer</code> (zoom + export only). Defaults:{' '}
+          <code>basic → dialog</code>, <code>viewer → viewer</code>, <code>advanced</code> /{' '}
+          <code>full → workspace</code>. The crop frame itself is a third, independent switch — see{' '}
+          <a href="#crop-frame">Crop frame &amp; opening aspect</a>.
+        </p>
+      </DocExample>
+
+      <DocExample
+        anchor="crop-frame"
+        title="Crop frame & opening aspect"
+        description="cropFrame picks the crop model independently of the chrome: 'fixed' is the slot crop (the frame stays put, the image pans and zooms under it, and it persists while other tools are used), 'movable' the editing crop with Apply. Below: the advanced tool set with a fixed-slot contain crop that opens at a custom 1200×630 'Social' ratio — initialAspect takes an AspAspectOption, not only a preset."
+        sources={CROP_FRAME_SOURCES}
+      >
+        <ImageEditor
+          mode="advanced"
+          src="asc-logo-full.svg"
+          cropFrame="fixed"
+          fitMode="contain"
+          aspectPresets={['1:1']}
+          aspectRatios={SOCIAL_RATIOS}
+          initialAspect={SOCIAL_RATIOS[0]}
+          exportBackground="#ffffff"
+          exportFormats={['png']}
+          commitLabel="Use this banner"
+          showDownload={false}
+          height="520px"
+          onSaved={(blob) =>
+            setCommitted(`committed ${blob.type} — ${blob.size} bytes, nothing downloaded`)
+          }
+        />
+        <p className="prose">
+          Defaults are unchanged: <code>cropFrame</code> is <code>null</code>, which means{' '}
+          <code>fixed</code> in the <code>dialog</code> chrome and <code>movable</code> elsewhere.
+          With a fixed frame the options panel drops Apply / Cancel — the chips are the whole control
+          (<em>Free</em> removes the frame) and the commit button exports the slot. A sole constrained
+          chip offered without <em>Free</em> — preset or custom — is auto-selected as the opening
+          frame.
         </p>
       </DocExample>
 

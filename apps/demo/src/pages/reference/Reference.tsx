@@ -47,6 +47,17 @@ const logo = await openImageEditorDialog({
   fitMode: 'contain',
   exportBackground: '#ffffff',
   commitLabel: 'Use this logo',
+});
+
+// The same slot crop with the advanced tool set, opening at a custom ratio
+const banner = await openImageEditorDialog({
+  src,
+  mode: 'advanced',
+  cropFrame: 'fixed',                 // slot crop in any chrome
+  fitMode: 'contain',
+  aspectRatios: [aspectOption(1200, 630, 'Social')],
+  initialAspect: aspectOption(1200, 630, 'Social'),
+  commitLabel: 'Use this banner',
 });`,
   },
 ];
@@ -100,6 +111,12 @@ const PROPS: readonly PropRow[] = [
   { prop: 'filters', type: "AspFilter[] | 'all' | null", def: 'null' },
   { prop: 'aspectPresets', type: 'AspAspectPreset[]', def: "['free','1:1','4:3','16:9']" },
   { prop: 'aspectRatios', type: 'AspAspectOption[]', def: '[]' },
+  {
+    prop: 'initialAspect',
+    type: 'AspAspectPreset | AspAspectOption | null',
+    def: 'null (sole constrained chip, else free)',
+  },
+  { prop: 'cropFrame', type: "'fixed' | 'movable' | null", def: 'null (dialog → fixed, else movable)' },
   { prop: 'fitMode', type: "'cover' | 'contain'", def: "'cover'" },
   { prop: 'exportFormats', type: 'AspExportFormat[]', def: "['png','jpeg','webp']" },
   { prop: 'exportQuality', type: 'number', def: '90' },
