@@ -7,8 +7,40 @@
  * that can drift.
  */
 
-/** Layout/baseline preset — sets the chrome and a default tool set. */
+/** Layout/baseline preset — sets the default chrome and a default tool set. */
 export type AspMode = 'viewer' | 'basic' | 'advanced' | 'full';
+
+/**
+ * Which chrome renders around the canvas, independent of the tool set:
+ * `dialog` is the compact card with a fixed crop frame (the image pans and
+ * zooms underneath it), `workspace` the full rail + options + layers surface
+ * with a movable crop frame, `viewer` a read-only zoom + export bar.
+ * Each {@link AspMode} has a default chrome — see {@link defaultChromeFor}.
+ */
+export type AspChrome = 'dialog' | 'workspace' | 'viewer';
+
+/** The chrome a mode renders in unless the host overrides it with `chrome`. */
+export function defaultChromeFor(mode: AspMode): AspChrome {
+  switch (mode) {
+    case 'basic':
+      return 'dialog';
+    case 'viewer':
+      return 'viewer';
+    default:
+      return 'workspace';
+  }
+}
+
+/**
+ * How the image fits the fixed crop frame of the `dialog` chrome.
+ * `cover` (default, avatar crop): the image always fills the frame — the zoom
+ * floor is the cover scale and the result never has gaps. `contain` (logo /
+ * artwork crop): the zoom floor is the whole-image fit, so an image of any
+ * aspect can be placed inside the frame; uncovered area is filled with the
+ * export background at export time.
+ */
+export type AspFitMode = 'cover' | 'contain';
+
 
 /**
  * A host-controllable size: a number (interpreted as `px`) or any CSS length —

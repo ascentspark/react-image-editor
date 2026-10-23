@@ -20,6 +20,15 @@ import { embedFontsInSvg } from './svg-fonts';
 import { decodeImageBlob } from './image-decode';
 import type { AspBackgroundRemovalLoader, AspHeicDecoderLoader } from './loaders';
 import { type FrameRect, defaultCropFrame, clampFrame, applyRatio } from './crop-session';
+import {
+  IMAGE_CROP_ZOOM_MAX,
+  containScale,
+  coverScale,
+  frameOffsetCorrection,
+  minImageCropZoomPct,
+  rotatedBounds,
+} from './image-crop-fit';
+import { resolveExportFill, type RasterExportFormat } from './export-fill';
 import { buildFabricFilters, LOOK_FILTERS } from './fabric-filters';
 import { loadFabric, type FabricModule } from './fabric-loader';
 import { resolveExport } from './export-config';
@@ -32,6 +41,7 @@ import {
   type AspExportFormat,
   type AspExportTarget,
   type AspFilter,
+  type AspFitMode,
 } from '../types/editor.types';
 
 export interface EngineOptions {
@@ -261,8 +271,15 @@ export class EditorEngine {
    * advanced workspace.
    */
   private imageCropActive = false;
-  /** The "cover" scale at which the image exactly fills the fixed crop frame (zoom floor). */
+  /** The "cover" scale at which the image exactly fills the fixed crop frame (100% zoom). */
   private imageCropFitScale = 1;
+  /** How the image may sit in the fixed frame: filling it, or letterboxed inside it. */
+  private imageCropFitMode: AspFitMode = 'cover';
+  /**
+   * Host colour composited under unpainted export pixels when the scene has no
+   * background of its own (see {@link resolveExportFill}).
+   */
+  private exportBackground: string | null = null;
   private rulersEnabled = false;
   private manualGuides: ManualGuide[] = [];
   /** Live preview of a guide being dragged from a ruler (not yet committed). */
@@ -414,7 +431,7 @@ export class EditorEngine {
         return;
       }
       if (this.imageCropActive && e.target === this.baseImage) {
-        this.clampImageToCover();
+        this.clampImageToFrame();
         return;
       }
       this.applySnap(e.target);
@@ -430,7 +447,7 @@ export class EditorEngine {
         return;
       }
       if (this.imageCropActive && e.target === this.baseImage) {
-        this.clampImageToCover();
+        this.clampImageToFrame();
         this.canvas.requestRenderAll();
         return;
       }
@@ -1136,8 +1153,10 @@ export class EditorEngine {
   /**
    * Begin an avatar-style crop: a FIXED crop frame of `ratio`, with the base
    * image grabbable to pan and zoomable (via {@link zoomImageCrop}) underneath
-   * it. The image always covers the frame — there are no gaps. `null` ratio ends
-   * the image crop (full image).
+   * it. In the default `cover` fit the image always fills the frame — there are
+   * no gaps; in `contain` it may zoom out until the whole image sits inside the
+   * frame (see {@link setImageCropFitMode}). `null` ratio ends the image crop
+   * (full image).
    */
   beginImageCrop(ratio: number | null): void {
     const image = this.baseImage;
@@ -1184,9 +1203,11 @@ export class EditorEngine {
   }
 
   /**
-   * Zoom the image within the fixed crop frame. `pct` is 100..400 where 100% is
-   * the "cover" floor (image exactly fills the frame). Zooms about the frame
-   * centre and keeps the frame covered.
+   * Zoom the image within the fixed crop frame. `pct` is cover-relative: 100%
+   * is the scale at which the image exactly fills the frame. It is clamped to
+   * {@link zoomRange} — a floor of 100 in `cover`, the whole-image fit in
+   * `contain` — and the ceiling {@link IMAGE_CROP_ZOOM_MAX}. Zooms about the
+   * frame centre, then re-clamps the pan so the frame stays legal.
    */
   zoomImageCrop(pct: number): void {
     const image = this.baseImage;
@@ -1194,7 +1215,8 @@ export class EditorEngine {
     if (!image || !frame || !this.imageCropActive) {
       return;
     }
-    const scale = this.imageCropFitScale * (clamp(pct, 100, 400) / 100);
+    const { min, max } = this.zoomRange;
+    const scale = this.imageCropFitScale * (clamp(pct, min, max) / 100);
     const fcx = frame.left + frame.width / 2;
     const fcy = frame.top + frame.height / 2;
     const cur = image.scaleX ?? 1;
@@ -1206,8 +1228,49 @@ export class EditorEngine {
       top: fcy + ((image.top ?? 0) - fcy) * k,
     });
     image.setCoords();
-    this.clampImageToCover();
+    this.clampImageToFrame();
     this.canvas.requestRenderAll();
+  }
+
+  /**
+   * Choose how the image fits the fixed crop frame. Switching to `cover` while
+   * a letterboxed image is on screen scales it back up to fill the frame;
+   * switching to `contain` only lowers the floor (the image stays where it is).
+   */
+  setImageCropFitMode(mode: AspFitMode): void {
+    if (this.imageCropFitMode === mode) {
+      return;
+    }
+    this.imageCropFitMode = mode;
+    if (this.imageCropActive) {
+      this.clampImageToFrame();
+      this.canvas.requestRenderAll();
+    }
+  }
+
+  getImageCropFitMode(): AspFitMode {
+    return this.imageCropFitMode;
+  }
+
+  /**
+   * The zoom slider's honest bounds for the CURRENT interaction: while the
+   * fixed-frame crop is active, cover-relative image zoom (floor 100 in `cover`,
+   * the whole-image fit in `contain`); otherwise the viewport zoom. One source
+   * for both the slider's `min`/`max` and the clamp, so `min` is always reachable.
+   */
+  get zoomRange(): { readonly min: number; readonly max: number } {
+    if (this.imageCropActive && this.cropRegion) {
+      const frame = this.cropRegion;
+      return {
+        min: minImageCropZoomPct(
+          this.imageCropFitMode,
+          this.coverScaleFor(frame),
+          this.containScaleFor(frame),
+        ),
+        max: IMAGE_CROP_ZOOM_MAX,
+      };
+    }
+    return { min: ZOOM_MIN, max: ZOOM_MAX };
   }
 
   /** Commit the avatar crop: keep the fixed region as the export region, end the mode. */
@@ -1237,7 +1300,11 @@ export class EditorEngine {
     this.canvas.renderAll();
   }
 
-  /** Place the fixed crop frame for `ratio` and cover it with the image, centred. */
+  /**
+   * Place the fixed crop frame for `ratio` and centre the image in it — at the
+   * cover scale (filling the frame) in `cover`, at the whole-image fit in
+   * `contain`, which is where a logo of the wrong aspect wants to start.
+   */
   private setImageCropFrame(ratio: number | null): void {
     const image = this.baseImage;
     if (!image) {
@@ -1249,42 +1316,49 @@ export class EditorEngine {
     this.cropRegion = frame;
     const cover = this.coverScaleFor(frame);
     this.imageCropFitScale = cover;
+    const start = this.imageCropFitMode === 'contain' ? this.containScaleFor(frame) : cover;
     image.set({
       originX: 'center',
       originY: 'center',
-      scaleX: cover,
-      scaleY: cover,
+      scaleX: start,
+      scaleY: start,
       left: frame.left + frame.width / 2,
       top: frame.top + frame.height / 2,
     });
     image.setCoords();
-    this.clampImageToCover();
+    this.clampImageToFrame();
+  }
+
+  /** Axis-aligned bounds of the base image at its current rotation, in source pixels. */
+  private rotatedImageBounds(): { width: number; height: number } {
+    const image = this.baseImage;
+    return rotatedBounds(image?.width ?? 1, image?.height ?? 1, this.rotation + this.straighten);
   }
 
   /** The smallest image scale at which its (rotated) bounds still cover `frame`. */
   private coverScaleFor(frame: FrameRect): number {
-    const image = this.baseImage;
-    if (!image) {
-      return 1;
-    }
-    const iw = image.width ?? 1;
-    const ih = image.height ?? 1;
-    const rad = (((this.rotation + this.straighten) % 360) * Math.PI) / 180;
-    const cos = Math.abs(Math.cos(rad));
-    const sin = Math.abs(Math.sin(rad));
-    const bboxW = iw * cos + ih * sin;
-    const bboxH = iw * sin + ih * cos;
-    return Math.max(frame.width / bboxW, frame.height / bboxH);
+    return this.baseImage ? coverScale(frame, this.rotatedImageBounds()) : 1;
   }
 
-  /** Keep the panned/zoomed image fully covering the fixed crop frame (no gaps). */
-  private clampImageToCover(): void {
+  /** The largest image scale at which its (rotated) bounds still fit inside `frame`. */
+  private containScaleFor(frame: FrameRect): number {
+    return this.baseImage ? containScale(frame, this.rotatedImageBounds()) : 1;
+  }
+
+  /**
+   * Keep the panned/zoomed image legal against the fixed crop frame: never
+   * below the fit mode's scale floor, and panned so that (per axis) the frame
+   * stays covered where the image overflows it and the image stays inside the
+   * frame where it does not — see {@link frameOffsetCorrection}.
+   */
+  private clampImageToFrame(): void {
     const image = this.baseImage;
     const frame = this.cropRegion;
     if (!image || !frame) {
       return;
     }
-    const minScale = this.coverScaleFor(frame);
+    const minScale =
+      this.imageCropFitMode === 'contain' ? this.containScaleFor(frame) : this.coverScaleFor(frame);
     if ((image.scaleX ?? 1) < minScale - 1e-4) {
       image.set({ scaleX: minScale, scaleY: minScale });
     }
@@ -1292,19 +1366,7 @@ export class EditorEngine {
     // corner coords until render, so recompute them before measuring — otherwise
     // the bounding box is one move stale and the image drifts out of the frame.
     image.setCoords();
-    const b = image.getBoundingRect();
-    let dx = 0;
-    let dy = 0;
-    if (b.left > frame.left) {
-      dx = frame.left - b.left;
-    } else if (b.left + b.width < frame.left + frame.width) {
-      dx = frame.left + frame.width - (b.left + b.width);
-    }
-    if (b.top > frame.top) {
-      dy = frame.top - b.top;
-    } else if (b.top + b.height < frame.top + frame.height) {
-      dy = frame.top + frame.height - (b.top + b.height);
-    }
+    const { dx, dy } = frameOffsetCorrection(frame, image.getBoundingRect(), this.imageCropFitMode);
     if (dx !== 0 || dy !== 0) {
       image.set({ left: (image.left ?? 0) + dx, top: (image.top ?? 0) + dy });
       image.setCoords();
@@ -1348,8 +1410,51 @@ export class EditorEngine {
     return { left: (cw - width) / 2, top: (ch - height) / 2, width, height };
   }
 
+  /**
+   * A colour composited under every pixel the scene leaves unpainted in a
+   * raster export (letterbox bands of a `contain` crop, a rotated image's
+   * corners, a transparent source) when the Background tool set nothing.
+   * `null` restores the default: PNG/WebP stay transparent, JPEG fills white.
+   */
+  setExportBackground(color: string | null): void {
+    this.exportBackground = color || null;
+  }
+
+  getExportBackground(): string | null {
+    return this.exportBackground;
+  }
+
+  /** True when the Background tool has given the scene a colour, gradient or image. */
+  private sceneHasBackground(): boolean {
+    return Boolean(this.canvas.backgroundColor) || Boolean(this.canvas.backgroundImage);
+  }
+
+  /**
+   * Run `fn` with the export fill painted as the canvas background, restoring
+   * the scene afterwards. No history entry: the fill is an export concern, not
+   * an edit, so undo and templates never see it.
+   */
+  private withExportFill<T>(format: RasterExportFormat, fn: () => T): T {
+    const fill = resolveExportFill(this.sceneHasBackground(), this.exportBackground, format);
+    if (fill === null) {
+      return fn();
+    }
+    const previous = this.canvas.backgroundColor;
+    this.canvas.backgroundColor = fill;
+    try {
+      return fn();
+    } finally {
+      this.canvas.backgroundColor = previous;
+      this.canvas.requestRenderAll();
+    }
+  }
+
   /** Render the output region to a data URL at its target pixel size. */
-  private artboardDataUrl(format: 'png' | 'jpeg' | 'webp', quality: number): string {
+  private artboardDataUrl(format: RasterExportFormat, quality: number): string {
+    return this.withExportFill(format, () => this.renderOutputDataUrl(format, quality));
+  }
+
+  private renderOutputDataUrl(format: RasterExportFormat, quality: number): string {
     const rect = this.outputRect();
     if (!rect) {
       return this.canvas.toDataURL({ format, quality, multiplier: 1 });
@@ -1641,12 +1746,12 @@ export class EditorEngine {
     this.baseImage?.setCoords();
     if (this.imageCropActive && this.cropRegion) {
       this.imageCropFitScale = this.coverScaleFor(this.cropRegion);
-      this.clampImageToCover();
+      this.clampImageToFrame();
     }
     this.canvas.requestRenderAll();
   }
 
-  /** Image-crop zoom as a percentage where 100% is the cover floor (for the slider). */
+  /** Image-crop zoom as a cover-relative percentage (100% = image exactly fills the frame). */
   get imageCropZoomPct(): number {
     const img = this.baseImage;
     if (!this.imageCropActive || !img || this.imageCropFitScale <= 0) {
