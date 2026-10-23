@@ -110,8 +110,9 @@ test.describe('workspace (advanced mode)', () => {
     await page.getByRole('button', { name: 'Download image' }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe('image.png');
-    await expect(page.getByTestId('stat-exported')).not.toHaveText('-');
-    await expect(page.getByTestId('stat-saved')).toContainText('image/png');
+    await expect(page.getByTestId('stat-exported')).toContainText('image/png');
+    // A download is not a commit: onSaved must stay silent (1.2.0 contract).
+    await expect(page.getByTestId('stat-saved')).toHaveText('-');
   });
 
   test('sample picker swaps the canvas image', async ({ page }) => {

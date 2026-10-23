@@ -38,6 +38,14 @@ jobs:
       # linux baseline is not checked in yet the shot is recorded instead of failing,
       # so the visual suite is a render smoke until linux baselines are committed.
       - run: npm run e2e -- --update-snapshots=missing
+      # The linux visual baselines live on the runner (recorded by --update-snapshots=missing);
+      # publish them every run so they can be harvested and committed after an intentional UI change.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-baselines
+          path: e2e/visual.spec.ts-snapshots/
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
