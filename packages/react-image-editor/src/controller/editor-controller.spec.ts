@@ -5,7 +5,11 @@ import { EditorController, initialEditorUiState, isTypingTarget, type EditorCont
 function makeController(overrides: Partial<EditorControllerProps> = {}): EditorController {
   return new EditorController(() => ({
     mode: 'advanced',
+    chrome: null,
+    resolvedToolKeys: ['crop', 'rotate', 'adjust'],
     initialAspect: null,
+    fitMode: 'cover',
+    exportBackground: null,
     aspectPresets: ['free', '1:1', '4:3', '16:9'],
     exportFormats: ['png', 'jpeg', 'webp'],
     exportTarget: null,
@@ -84,21 +88,37 @@ describe('ensureActiveTool', () => {
   });
 });
 
-describe('syncExportDefaults', () => {
-  it('applies the quality and keeps a still-offered format', () => {
+describe('export defaults', () => {
+  it('applies the quality without touching the selected format', () => {
     const controller = makeController();
     controller.setExportFormat('jpeg');
-    controller.syncExportDefaults(70, ['png', 'jpeg']);
+    controller.syncExportQuality(70);
     const state = controller.getSnapshot();
     expect(state.exportQ).toBe(70);
     expect(state.exportFormat).toBe('jpeg');
   });
 
-  it('falls back to the first format when the current one is not offered', () => {
+  it('a new format list makes its first entry the default (the commit format in the dialog)', () => {
     const controller = makeController();
     controller.setExportFormat('png');
-    controller.syncExportDefaults(90, ['webp', 'svg']);
-    expect(controller.getSnapshot().exportFormat).toBe('webp');
+    controller.syncExportFormats(['jpeg', 'png']);
+    expect(controller.getSnapshot().exportFormat).toBe('jpeg');
+    controller.syncExportFormats([]);
+    expect(controller.getSnapshot().exportFormat).toBe('jpeg');
+  });
+});
+
+describe('layout (chrome vs. mode)', () => {
+  it('derives the chrome from the mode by default', () => {
+    expect(makeController({ mode: 'basic' }).layout()).toBe('dialog');
+    expect(makeController({ mode: 'viewer' }).layout()).toBe('viewer');
+    expect(makeController({ mode: 'advanced' }).layout()).toBe('workspace');
+    expect(makeController({ mode: 'full' }).layout()).toBe('workspace');
+  });
+
+  it('an explicit chrome wins over the mode', () => {
+    expect(makeController({ mode: 'basic', chrome: 'workspace' }).layout()).toBe('workspace');
+    expect(makeController({ mode: 'advanced', chrome: 'dialog' }).layout()).toBe('dialog');
   });
 });
 

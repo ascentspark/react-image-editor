@@ -12,15 +12,18 @@ import { drawRuler, type RulerColors } from '../engine/rulers';
 import { type AspBackgroundRemovalLoader, type AspHeicDecoderLoader } from '../engine/loaders';
 import { FILTER_REGISTRY } from '../registry/tool-registry';
 import { groupForTool } from '../registry/toolbar-groups';
-import type {
-  AspAspectOption,
-  AspAspectPreset,
-  AspEditorError,
-  AspExportFormat,
-  AspExportTarget,
-  AspFilter,
-  AspMode,
-  AspTool,
+import {
+  defaultChromeFor,
+  type AspAspectOption,
+  type AspAspectPreset,
+  type AspEditorError,
+  type AspExportFormat,
+  type AspExportTarget,
+  type AspFilter,
+  type AspMode,
+  type AspTool,
+  type AspChrome,
+  type AspFitMode,
 } from '../types/editor.types';
 import {
   DEFAULT_FONTS,
@@ -47,6 +50,8 @@ export interface EditorUiState {
   /** Per-toolbar-group last-selected member (drives flyout slot icons). */
   readonly activeMembers: Readonly<Record<string, AspTool>>;
   readonly zoomPct: number;
+  /** The zoom slider's bounds for the current interaction (see `EditorEngine.zoomRange`). */
+  readonly zoomRange: { readonly min: number; readonly max: number };
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly historyEntries: readonly HistoryStep[];
@@ -120,7 +125,15 @@ export type EditorUiPatch = { -readonly [K in keyof EditorUiState]?: EditorUiSta
  */
 export interface EditorControllerProps {
   readonly mode: AspMode;
+  /** Chrome override; `null` uses the mode's default (see {@link defaultChromeFor}). */
+  readonly chrome: AspChrome | null;
+  /** The tool keys the hook resolved for this mode / tool list, so the controller knows whether `crop` exists. */
+  readonly resolvedToolKeys: readonly AspTool[];
   readonly initialAspect: AspAspectPreset | null;
+  /** How the image fits the dialog chrome's fixed crop frame. */
+  readonly fitMode: AspFitMode;
+  /** Fill under unpainted raster-export pixels when the scene has no background. */
+  readonly exportBackground: string | null;
   readonly aspectPresets: readonly AspAspectPreset[];
   readonly exportFormats: readonly AspExportFormat[];
   /** Pixel size a cropped export renders at; a selected aspect option overrides it. */
@@ -129,9 +142,11 @@ export interface EditorControllerProps {
   readonly fonts: readonly FontOption[];
   readonly backgroundRemovalLoader: AspBackgroundRemovalLoader | null;
   readonly heicDecoderLoader: AspHeicDecoderLoader | null;
+  /** The user committed: the commit action in every chrome, never a download. */
   readonly onSaved?: (blob: Blob) => void;
   readonly onCanceled?: () => void;
   readonly onImageLoaded?: () => void;
+  /** A file was written: Export → Download. Never fires `onSaved`. */
   readonly onExported?: (blob: Blob) => void;
   readonly onError?: (error: AspEditorError) => void;
 }
@@ -192,6 +207,7 @@ export function initialEditorUiState(): EditorUiState {
     activeTool: null,
     activeMembers: {},
     zoomPct: 100,
+    zoomRange: { min: 25, max: 400 },
     canUndo: false,
     canRedo: false,
     historyEntries: [],
@@ -393,6 +409,8 @@ export class EditorController {
         this.engine.setSnapping(this.state.snapEnabled);
         this.engine.setArtboard(this.state.artboard);
         this.applyExportTarget();
+        this.engine.setImageCropFitMode(this.props.fitMode);
+        this.engine.setExportBackground(this.props.exportBackground);
         this.engine.setRulersEnabled(this.state.rulersEnabled);
         this.boundCanvas = canvas;
         this.lastSource = undefined;
@@ -448,29 +466,59 @@ export class EditorController {
   }
 
   /**
-   * After a load, constrain the crop to the resolved initial aspect. In basic
-   * (dialog) mode the crop IS the mode, so start it live; advanced/full only set
-   * the active aspect (the crop tool reads it when the user enters cropping).
+   * After a load, constrain the crop to the resolved initial aspect — with a
+   * live frame in EVERY chrome that can crop. The dialog's fixed frame starts
+   * at once; the workspace enters the Crop tool, whose session sync opens the
+   * movable frame at this aspect. Where nothing can enforce the aspect (the
+   * viewer, or a tool set without `crop`) the chip is left inactive: the UI must
+   * never assert a constraint it is not applying.
    */
   private applyInitialAspect(): void {
     const aspect = this.resolveInitialAspect();
-    this.patch({ activeCrop: aspect });
-    if (aspect !== 'free' && this.layout() === 'basic') {
-      this.patch({ activeAspectLabel: '', activeAspectTarget: null });
+    if (aspect === 'free') {
+      this.patch({ activeCrop: 'free' });
+      return;
+    }
+    const layout = this.layout();
+    if (layout === 'dialog') {
+      this.patch({ activeCrop: aspect, activeAspectLabel: '', activeAspectTarget: null });
       this.applyExportTarget();
       this.ensureCropSession(this.ratioFromPreset(aspect));
+      return;
     }
+    if (layout === 'workspace' && this.props.resolvedToolKeys.includes('crop')) {
+      this.patch({ activeCrop: aspect, activeAspectLabel: '', activeAspectTarget: null });
+      this.applyExportTarget();
+      if (this.state.activeTool === 'crop') {
+        // Already in the tool (e.g. the source changed): reshape or restart the frame.
+        this.patch({ cropActive: this.engine?.isCropping() ?? false });
+        this.ensureCropSession(this.ratioFromPreset(aspect));
+      } else {
+        this.selectTool('crop');
+      }
+      return;
+    }
+    this.patch({ activeCrop: 'free' });
   }
 
-  private layout(): 'workspace' | 'basic' | 'viewer' {
-    const mode = this.props.mode;
-    if (mode === 'basic') {
-      return 'basic';
+  /** The chrome in use: the host's explicit `chrome`, else the mode's default. */
+  layout(): AspChrome {
+    return this.props.chrome ?? defaultChromeFor(this.props.mode);
+  }
+
+  /** Push the fixed-frame fit mode to the engine (hook effect on the `fitMode` prop). */
+  syncFitMode(): void {
+    const engine = this.engine;
+    if (!engine) {
+      return;
     }
-    if (mode === 'viewer') {
-      return 'viewer';
-    }
-    return 'workspace';
+    engine.setImageCropFitMode(this.props.fitMode);
+    this.syncZoom();
+  }
+
+  /** Push the export fill to the engine (hook effect on the `exportBackground` prop). */
+  syncExportBackground(): void {
+    this.engine?.setExportBackground(this.props.exportBackground);
   }
 
   private emitError(code: string, error: unknown): void {
@@ -529,9 +577,25 @@ export class EditorController {
       canRedo: engine.canRedo,
       historyEntries: engine.historyEntries,
       historyIndex: engine.historyIndex,
-      zoomPct: engine.isImageCropping() ? engine.imageCropZoomPct : engine.zoom,
       layers: engine.getLayers(),
+      ...this.zoomPatch(engine),
     });
+  }
+
+  /** Mirror the engine's zoom value and its honest slider bounds for the current interaction. */
+  private syncZoom(): void {
+    if (this.engine) {
+      this.patch(this.zoomPatch(this.engine));
+    }
+  }
+
+  private zoomPatch(engine: EditorEngine): EditorUiPatch {
+    const range = engine.zoomRange;
+    const current = this.state.zoomRange;
+    return {
+      zoomPct: engine.isImageCropping() ? engine.imageCropZoomPct : engine.zoom,
+      zoomRange: current.min === range.min && current.max === range.max ? current : range,
+    };
   }
 
   // ---- keyboard + pointer scope ---------------------------------------------
@@ -556,7 +620,7 @@ export class EditorController {
       return;
     }
     if (key === 'escape') {
-      if (this.layout() === 'basic') {
+      if (this.layout() === 'dialog') {
         this.cancel();
       } else {
         this.engine?.discardSelection();
@@ -867,13 +931,20 @@ export class EditorController {
     this.engine?.setExportTarget(this.state.activeAspectTarget ?? this.props.exportTarget);
   }
 
-  /** Sync export defaults from inputs (exportQuality / exportFormats props). */
-  syncExportDefaults(quality: number, formats: readonly AspExportFormat[]): void {
-    const partial: EditorUiPatch = { exportQ: quality };
-    if (formats.length > 0 && !formats.includes(this.state.exportFormat)) {
-      partial.exportFormat = formats[0];
+  /** Sync the export quality from its prop. */
+  syncExportQuality(quality: number): void {
+    this.patch({ exportQ: quality });
+  }
+
+  /**
+   * The first allowed format is the default (and, in chromes without a format
+   * picker, the commit format), so a new list resets the selection rather than
+   * keeping a stale pick.
+   */
+  syncExportFormats(formats: readonly AspExportFormat[]): void {
+    if (formats.length > 0) {
+      this.patch({ exportFormat: formats[0] });
     }
-    this.patch(partial);
   }
 
   // ---- top bar ----------------------------------------------------------------
@@ -920,12 +991,24 @@ export class EditorController {
   }
 
   zoomIn(): void {
-    this.engine?.zoomBy(ZOOM_STEP);
-    this.sync();
+    this.zoomStep(ZOOM_STEP);
   }
 
   zoomOut(): void {
-    this.engine?.zoomBy(-ZOOM_STEP);
+    this.zoomStep(-ZOOM_STEP);
+  }
+
+  /** Step whichever zoom the current interaction owns: the image in a fixed-frame crop, else the viewport. */
+  private zoomStep(deltaPct: number): void {
+    const engine = this.engine;
+    if (!engine) {
+      return;
+    }
+    if (engine.isImageCropping()) {
+      engine.zoomImageCrop(engine.imageCropZoomPct + deltaPct);
+    } else {
+      engine.zoomBy(deltaPct);
+    }
     this.sync();
   }
 
@@ -1000,6 +1083,11 @@ export class EditorController {
     this.patch({ exportQ: value });
   }
 
+  /**
+   * Export → Download: write the image to a file and report it through
+   * `onExported`. Deliberately NOT `onSaved` — a download is not a commit, and a
+   * host listening for the result must never also find a file in Downloads.
+   */
   async download(): Promise<void> {
     const engine = this.engine;
     if (!engine) {
@@ -1013,24 +1101,26 @@ export class EditorController {
         this.props.exportFormats,
       );
       this.props.onExported?.(blob);
-      this.props.onSaved?.(blob);
       triggerDownload(blob, `image.${extensionFor(this.state.exportFormat)}`);
     } catch (error) {
       this.emitError('export-failed', error);
     }
   }
 
-  // ---- basic / viewer layouts --------------------------------------------------
+  // ---- commit / cancel (every chrome) -------------------------------------------
 
-  /** Save (basic modal): export to a Blob and emit `saved` without downloading. */
+  /**
+   * The commit action: export to a Blob in the selected format and hand it to
+   * the host through `onSaved`. Writes no file and creates no object URL. An
+   * in-progress crop is applied first — the user framed it and pressed commit.
+   */
   async save(): Promise<void> {
     const engine = this.engine;
     if (!engine) {
       return;
     }
-    const format = this.props.exportFormats[0] ?? 'png';
+    const format = this.state.exportFormat;
     try {
-      // Commit an in-progress crop (basic mode crops on Save) before export.
       if (engine.isImageCropping()) {
         engine.applyImageCrop();
         this.patch({ cropActive: false, hasCropRegion: true });
@@ -1057,11 +1147,11 @@ export class EditorController {
   }
 
   onZoomSlider(value: number): void {
-    // In avatar crop the slider zooms ONLY the image inside the fixed frame
-    // (100% = cover floor), never the canvas viewport.
+    // In a fixed-frame crop the slider zooms ONLY the image inside the frame
+    // (100% = the image exactly fills it), never the canvas viewport.
     if (this.engine?.isImageCropping()) {
       this.engine.zoomImageCrop(value);
-      this.patch({ zoomPct: value });
+      this.syncZoom();
       return;
     }
     this.engine?.setZoom(value);
@@ -1114,21 +1204,21 @@ export class EditorController {
     return aspectRatioValue(preset);
   }
 
-  /** Start the crop frame if one isn't already active (e.g. from the basic-mode chips). */
+  /** Start the crop frame if one isn't already active (e.g. from the dialog's chips). */
   private ensureCropSession(ratio: number | null): void {
-    // Basic (dialog/avatar) mode: the crop frame is FIXED; the image pans and
-    // zooms underneath it. Advanced mode keeps the movable-frame crop.
-    if (this.layout() === 'basic') {
+    // Dialog chrome: the crop frame is FIXED; the image pans and zooms
+    // underneath it. The workspace keeps the movable-frame crop.
+    if (this.layout() === 'dialog') {
       this.engine?.setImageCropRatio(ratio);
       this.patch({ cropActive: this.engine?.isImageCropping() ?? false });
-      return;
-    }
-    if (this.engine && !this.engine.isCropping()) {
+    } else if (this.engine && !this.engine.isCropping()) {
       this.engine.beginCrop(ratio);
       this.patch({ cropActive: true });
     } else {
       this.engine?.setCropRatio(ratio);
     }
+    // Entering or leaving a fixed-frame crop changes which zoom the slider owns.
+    this.syncZoom();
   }
 
   /** Choose a crop aspect preset — reshapes (or starts) the live crop frame. */

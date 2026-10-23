@@ -14,16 +14,19 @@ import { deriveTheme, type AspThemeMode } from '../theme/derive-theme';
 import { AspIcon } from '../icons/AspIcon';
 import { FILTER_REGISTRY, TOOL_REGISTRY, type FilterMeta, type ToolMeta } from '../registry/tool-registry';
 import { resolveGroups, type ResolvedGroup } from '../registry/toolbar-groups';
-import type {
-  AspAspectOption,
-  AspAspectPreset,
-  AspEditorError,
-  AspExportFormat,
-  AspExportTarget,
-  AspFilter,
-  AspMode,
-  AspSize,
-  AspTool,
+import {
+  defaultChromeFor,
+  type AspAspectOption,
+  type AspAspectPreset,
+  type AspChrome,
+  type AspEditorError,
+  type AspExportFormat,
+  type AspExportTarget,
+  type AspFilter,
+  type AspFitMode,
+  type AspMode,
+  type AspSize,
+  type AspTool,
 } from '../types/editor.types';
 import { DEFAULT_FONTS, GOOGLE_FONTS, type FontOption } from '../fonts/fonts';
 import { useEditorController, type EditorBinding } from '../controller/use-editor-controller';
@@ -41,19 +44,18 @@ const FALLBACK_ACCENT = '#1f6feb';
  * `advanced`/`full` carry the rail + canvas + options column; the simpler
  * modes need much less.
  */
-const MODE_MIN: Record<AspMode, { width: string; height: string }> = {
+const CHROME_MIN: Record<AspChrome, { width: string; height: string }> = {
   viewer: { width: '240px', height: '200px' },
-  basic: { width: '300px', height: '360px' },
-  advanced: { width: '640px', height: '460px' },
-  full: { width: '640px', height: '460px' },
+  dialog: { width: '300px', height: '360px' },
+  workspace: { width: '640px', height: '460px' },
 };
 
 /**
- * Width the `basic` (dialog card) layout hugs by default. MUST stay in sync with
- * `.asp-basic { max-width }` in the stylesheet. `basic` is a self-contained card,
- * so the host sizes to this rather than stretching to fill (and paint) its
- * container — otherwise, mounted in a modal scrim, the host becomes a
- * full-viewport baseColor panel sitting behind the card.
+ * Width the `dialog` chrome (the card `basic` mode renders in) hugs by default.
+ * MUST stay in sync with `.asp-basic { max-width }` in the stylesheet. The
+ * dialog is a self-contained card, so the host sizes to this rather than
+ * stretching to fill (and paint) its container — otherwise, mounted in a modal
+ * scrim, the host becomes a full-viewport baseColor panel sitting behind the card.
  */
 const BASIC_DIALOG_WIDTH = '520px';
 
@@ -67,7 +69,15 @@ function toCssSize(value: AspSize | null | undefined, fallback: string): string 
 
 export interface ImageEditorProps {
   readonly src?: string | Blob | null;
+  /** Baseline preset: picks the default tool set AND the default {@link ImageEditorProps.chrome}. */
   readonly mode?: AspMode;
+  /**
+   * Which chrome renders around the canvas, independently of the tool set the
+   * mode (or `tools`) selects. `null` uses the mode's default: `basic` → `dialog`,
+   * `viewer` → `viewer`, `advanced`/`full` → `workspace`. Set it to put a small
+   * tool set in the full workspace, or the fixed-frame dialog crop around any mode.
+   */
+  readonly chrome?: AspChrome | null;
   /**
    * Editor width — a number (px) or any CSS length (`'70%'`, `'80vh'`,
    * `'calc(100vw - 320px)'`). Defaults to filling the host's container. A
@@ -89,8 +99,23 @@ export interface ImageEditorProps {
   readonly initialAspect?: AspAspectPreset | null;
   /** Host-defined crop aspect targets (e.g. CMS sizes); shown after the presets. */
   readonly aspectRatios?: readonly AspAspectOption[];
+  /**
+   * How the image fits the `dialog` chrome's fixed crop frame. `cover` (default)
+   * is the avatar crop — the frame is always filled, so the result has no gaps.
+   * `contain` is the logo crop — the zoom floor drops to the whole-image fit, so
+   * an image of any aspect can be placed inside the frame; the area it leaves
+   * uncovered is filled with {@link ImageEditorProps.exportBackground} at export.
+   */
+  readonly fitMode?: AspFitMode;
   readonly exportFormats?: readonly AspExportFormat[];
   readonly exportQuality?: number;
+  /**
+   * Colour composited under every pixel the scene leaves unpainted in a raster
+   * export (a `contain` crop's letterbox, a rotated image's corners, a
+   * transparent source) when the Background tool set nothing. `null` keeps PNG
+   * and WebP transparent and fills JPEG white — never black.
+   */
+  readonly exportBackground?: string | null;
   /**
    * Pixel size a cropped export should be rendered at, e.g. `{width: 1000,
    * height: 1000}` for a profile photo. Without it a crop exports at the source
@@ -102,8 +127,25 @@ export interface ImageEditorProps {
   readonly baseColor?: string;
   readonly accentColor?: string;
   readonly themeMode?: AspThemeMode;
-  /** Heading shown by the `basic` modal layout. */
+  /** Heading shown by the `dialog` chrome. */
   readonly heading?: string;
+  /**
+   * Label of the commit action — the button that hands the result to the host
+   * through `onSaved` without writing a file. `null` reads "Save" in the dialog
+   * chrome and "Apply" elsewhere; the right word is host-specific ("Use this logo").
+   */
+  readonly commitLabel?: string | null;
+  /**
+   * Render the commit action in the workspace and viewer chromes. The dialog
+   * chrome always has one — committing is what a dialog is for.
+   */
+  readonly showCommit?: boolean;
+  /**
+   * Render the "Download image" action in the Export menu. Hosts that only want
+   * the Blob back (through the commit action) set `false` so nothing can land in
+   * the user's Downloads folder.
+   */
+  readonly showDownload?: boolean;
   /** Show the edit-history panel in the workspace (hosts that don't want it set false). */
   readonly showHistory?: boolean;
   /** Enable keyboard shortcuts while the pointer is over the editor. */
@@ -124,11 +166,16 @@ export interface ImageEditorProps {
    * Without it, importing a HEIC/HEIF file throws a descriptive error.
    */
   readonly heicDecoderLoader?: AspHeicDecoderLoader | null;
+  /**
+   * The user committed: here is the result. Fired by the commit action in every
+   * chrome, never by a download — a host listening here is never also left with
+   * a file in the user's Downloads folder.
+   */
   readonly onSaved?: (blob: Blob) => void;
   readonly onCanceled?: () => void;
   /** Fired after an image successfully loads (initial, picker, or upload). */
   readonly onImageLoaded?: () => void;
-  /** Fired with the exported Blob when the user downloads from the Export menu. */
+  /** A file was written: fired with the Blob when the user downloads from the Export menu. */
   readonly onExported?: (blob: Blob) => void;
   /** Fired on a recoverable error (load/export/engine init) instead of throwing. */
   readonly onError?: (error: AspEditorError) => void;
@@ -145,6 +192,7 @@ export interface ImageEditorProps {
 export function ImageEditor({
   src = null,
   mode = 'advanced',
+  chrome = null,
   width = null,
   height = null,
   tools = null,
@@ -153,13 +201,18 @@ export function ImageEditor({
   aspectPresets = ['free', '1:1', '4:3', '16:9'],
   initialAspect = null,
   aspectRatios = [],
+  fitMode = 'cover',
   exportFormats = ['png', 'jpeg', 'webp'],
   exportQuality = 90,
   exportTarget = null,
+  exportBackground = null,
   baseColor = FALLBACK_BASE,
   accentColor = FALLBACK_ACCENT,
   themeMode = 'light',
   heading = 'Edit image',
+  commitLabel = null,
+  showCommit = true,
+  showDownload = true,
   showHistory = true,
   keyboardEnabled = true,
   fonts = DEFAULT_FONTS,
@@ -176,14 +229,17 @@ export function ImageEditor({
   const binding = useEditorController({
     src,
     mode,
+    chrome,
     tools,
     disabledTools,
     filters,
     aspectPresets,
     initialAspect,
+    fitMode,
     exportFormats,
     exportQuality,
     exportTarget,
+    exportBackground,
     keyboardEnabled,
     fonts,
     backgroundRemovalLoader,
@@ -270,8 +326,10 @@ export function ImageEditor({
         ? 'Object'
         : (activeToolMeta?.label ?? '');
   const zoomLabel = `${state.zoomPct}%`;
-  const layout: 'workspace' | 'basic' | 'viewer' =
-    mode === 'basic' ? 'basic' : mode === 'viewer' ? 'viewer' : 'workspace';
+  /** The chrome in use: the host's explicit `chrome`, else the mode's default. */
+  const layout: AspChrome = chrome ?? defaultChromeFor(mode);
+  /** Text of the commit action: the host's label, else "Save" in the dialog and "Apply" elsewhere. */
+  const commitText = commitLabel ?? (layout === 'dialog' ? 'Save' : 'Apply');
   /**
    * Show the corner-radius slider when defining the next rectangle (Shapes tool,
    * nothing selected) or when a rectangle is selected.
@@ -279,18 +337,18 @@ export function ImageEditor({
   const showCornerRadius =
     (state.activeTool === 'shapes' && !state.hasSelection) || state.selectedIsRect;
 
-  // ---- host sizing (per-mode minimum; basic hugs its dialog-card width) -------
-  const isBasic = mode === 'basic';
-  const min = MODE_MIN[mode];
+  // ---- host sizing (per-chrome minimum; the dialog hugs its card width) --------
+  const isDialog = layout === 'dialog';
+  const min = CHROME_MIN[layout];
   const hostStyle: CSSProperties = {
-    width: toCssSize(width, isBasic ? `min(${BASIC_DIALOG_WIDTH}, 100%)` : '100%'),
-    height: toCssSize(height, isBasic ? 'auto' : '100%'),
+    width: toCssSize(width, isDialog ? `min(${BASIC_DIALOG_WIDTH}, 100%)` : '100%'),
+    height: toCssSize(height, isDialog ? 'auto' : '100%'),
     // Cap the min-width to the available space so the editor never forces
     // horizontal overflow on a narrow screen; the layout reflows instead.
     minWidth: `min(${min.width}, 100%)`,
-    // No min-height in `basic`, or a dialog scrim would show a baseColor strip
+    // No min-height in the dialog, or a modal scrim would show a baseColor strip
     // below the card (the host's background extending past the card's content).
-    minHeight: isBasic ? '0px' : min.height,
+    minHeight: isDialog ? '0px' : min.height,
     // Show a progress cursor over the editor while a web font is fetching.
     cursor: state.fontLoading ? 'progress' : undefined,
   };
@@ -420,7 +478,8 @@ export function ImageEditor({
               )}
               <span className="asp-spacer"></span>
               <ImageMenu binding={binding} onUploadInput={onUploadInput} />
-              <ExportMenu binding={binding} exportFormats={exportFormats} />
+              <ExportMenu binding={binding} exportFormats={exportFormats} showDownload={showDownload} />
+              {showCommit && <CommitButton binding={binding} label={commitText} />}
             </div>
 
             <div
@@ -581,7 +640,8 @@ export function ImageEditor({
           <div className="asp-topbar">
             <ZoomControl binding={binding} zoomLabel={zoomLabel} />
             <span className="asp-spacer"></span>
-            <ExportMenu binding={binding} exportFormats={exportFormats} />
+            <ExportMenu binding={binding} exportFormats={exportFormats} showDownload={showDownload} />
+            {showCommit && <CommitButton binding={binding} label={commitText} />}
           </div>
           <div ref={setStageEl} className="asp-stage">
             <canvas ref={setCanvasEl}></canvas>
@@ -589,7 +649,7 @@ export function ImageEditor({
         </div>
       )}
 
-      {layout === 'basic' && (
+      {layout === 'dialog' && (
         <div className="asp-basic asp-card">
           <div className="asp-basic__head">
             <div className="asp-basic__title">{heading}</div>
@@ -678,8 +738,8 @@ export function ImageEditor({
                 <input
                   type="range"
                   className="asp-range"
-                  min={100}
-                  max={300}
+                  min={state.zoomRange.min}
+                  max={state.zoomRange.max}
                   value={state.zoomPct}
                   onChange={(event) => controller.onZoomSlider(Number(event.currentTarget.value))}
                   aria-label="Zoom"
@@ -696,8 +756,12 @@ export function ImageEditor({
             <button type="button" className="asp-btn-line" onClick={() => controller.cancel()}>
               Cancel
             </button>
-            <button type="button" className="asp-btn-accent" onClick={() => void controller.save()}>
-              Save
+            <button
+              type="button"
+              className="asp-btn-accent asp-commit"
+              onClick={() => void controller.save()}
+            >
+              {commitText}
             </button>
           </div>
         </div>
@@ -826,22 +890,39 @@ function ImageMenu({
   );
 }
 
+/** The commit action: hands the result to the host through `onSaved`, writes no file. */
+function CommitButton({ binding, label }: { binding: EditorBinding; label: string }): ReactElement {
+  const { controller } = binding;
+  return (
+    <button
+      type="button"
+      className="asp-btn-accent asp-topbtn asp-commit"
+      onClick={() => void controller.save()}
+    >
+      <AspIcon name="check" size={16} /> {label}
+    </button>
+  );
+}
+
 function ExportMenu({
   binding,
   exportFormats,
+  showDownload,
 }: {
   binding: EditorBinding;
   exportFormats: readonly AspExportFormat[];
+  showDownload: boolean;
 }): ReactElement {
   const { controller, state } = binding;
   return (
     <div className="asp-pop">
       <button
         type="button"
-        className="asp-btn-accent asp-topbtn"
+        className="asp-btn-line asp-topbtn"
         onClick={() => controller.toggleExport()}
       >
-        <AspIcon name="download" size={16} /> Export
+        <AspIcon name={showDownload ? 'download' : 'sliders-horizontal'} size={16} />{' '}
+        {showDownload ? 'Export' : 'Format'}
       </button>
       {state.exportOpen && (
         <>
@@ -878,13 +959,15 @@ function ExportMenu({
               onChange={(event) => controller.setExportQuality(Number(event.currentTarget.value))}
               aria-label="Export quality"
             />
-            <button
-              type="button"
-              className="asp-btn-accent asp-download"
-              onClick={() => void controller.download()}
-            >
-              Download image
-            </button>
+            {showDownload && (
+              <button
+                type="button"
+                className="asp-btn-accent asp-download"
+                onClick={() => void controller.download()}
+              >
+                Download image
+              </button>
+            )}
           </div>
         </>
       )}
